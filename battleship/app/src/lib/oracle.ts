@@ -1,18 +1,23 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 
-const ORACLE_PRICE_ACCOUNT = new PublicKey(
-  "ORACLE_PRICE_ACCOUNT_ADDRESS" // Replace with actual MagicBlock Oracle price account
-);
+// Replace with actual MagicBlock Oracle price account address once available
+const ORACLE_PRICE_ACCOUNT_ADDRESS =
+  "11111111111111111111111111111111"; // System program as placeholder
 
 export async function getSolPriceUsd(
   connection: Connection,
 ): Promise<number> {
-  const info = await connection.getAccountInfo(ORACLE_PRICE_ACCOUNT);
-  if (!info) return 0;
-  // Parse MagicBlock Oracle price account format
-  // Return price in USD with 2 decimal precision
-  const price = 0; // TODO: parse from info.data once Oracle account format is documented
-  return price;
+  try {
+    const oracleAccount = new PublicKey(ORACLE_PRICE_ACCOUNT_ADDRESS);
+    const info = await connection.getAccountInfo(oracleAccount);
+    if (!info) return 0;
+    // Parse MagicBlock Oracle price account format
+    // Return price in USD with 2 decimal precision
+    const price = 0; // TODO: parse from info.data once Oracle account format is documented
+    return price;
+  } catch {
+    return 0;
+  }
 }
 
 export function formatBuyInDisplay(
