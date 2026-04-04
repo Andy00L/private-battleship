@@ -113,6 +113,7 @@ export function useGame() {
   // Subscription IDs
   const baseSubRef = useRef<number | null>(null);
   const teeSubRef = useRef<number | null>(null);
+  const teeBoardSubRef = useRef<number | null>(null);
 
   // Keep gameStateRef in sync
   useEffect(() => {
@@ -154,6 +155,85 @@ export function useGame() {
 
   function sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /** Reset all internal state for a fresh game. Called before createGame/joinGame. */
+  function resetForNewGame(): void {
+    // Clean up subscriptions from any previous game
+    if (baseSubRef.current !== null) {
+      connection.removeAccountChangeListener(baseSubRef.current);
+      baseSubRef.current = null;
+    }
+    if (teeRef.current) {
+      const teeConn = teeRef.current.getConnection();
+      if (teeSubRef.current !== null) {
+        teeConn.removeAccountChangeListener(teeSubRef.current);
+        teeSubRef.current = null;
+      }
+      if (teeBoardSubRef.current !== null) {
+        teeConn.removeAccountChangeListener(teeBoardSubRef.current);
+        teeBoardSubRef.current = null;
+      }
+    }
+
+    // Reset orchestration flags
+    boardDelegatedRef.current = false;
+    vrfRequestedRef.current = false;
+    gameStateDelegatedRef.current = false;
+    shipsPlacedOnTeeRef.current = false;
+    settledRef.current = false;
+    orchestratingRef.current = false;
+
+    // Reset game-specific state
+    storedPlacementsRef.current = null;
+    gameStateRef.current = null;
+    setGameState(null);
+    setMyGrid(new Array(36).fill(0));
+    setTxLog([]);
+    setLastHit(null);
+    setBoardSalt(null);
+    setShipsPlaced(false);
+    setPrizeClaimed(false);
+  }
+
+  // ── Session persistence for commit-reveal data ──────────────────────────
+  // boardSalt and storedPlacements MUST survive page refresh so that
+  // verify_board can be called post-game. We key by gamePda.
+
+  function persistCommitReveal(
+    pda: PublicKey,
+    salt: Uint8Array,
+    placements: ShipPlacementInput[],
+  ): void {
+    try {
+      const key = `battleship:${pda.toBase58()}`;
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          salt: Array.from(salt),
+          placements,
+        }),
+      );
+    } catch {
+      // sessionStorage unavailable (SSR, private mode full) — non-fatal
+    }
+  }
+
+  function restoreCommitReveal(
+    pda: PublicKey,
+  ): { salt: Uint8Array; placements: ShipPlacementInput[] } | null {
+    try {
+      const key = `battleship:${pda.toBase58()}`;
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      return {
+        salt: new Uint8Array(data.salt),
+        placements: data.placements,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -212,8 +292,21 @@ export function useGame() {
     return () => {
       if (baseSubRef.current !== null) {
         connection.removeAccountChangeListener(baseSubRef.current);
+        baseSubRef.current = null;
       }
-      teeRef.current?.destroy();
+      // Clean up TEE subscriptions before destroying the connection
+      if (teeRef.current) {
+        const teeConn = teeRef.current.getConnection();
+        if (teeSubRef.current !== null) {
+          teeConn.removeAccountChangeListener(teeSubRef.current);
+          teeSubRef.current = null;
+        }
+        if (teeBoardSubRef.current !== null) {
+          teeConn.removeAccountChangeListener(teeBoardSubRef.current);
+          teeBoardSubRef.current = null;
+        }
+        teeRef.current.destroy();
+      }
     };
   }, [connection]);
 
@@ -234,8 +327,10 @@ export function useGame() {
           );
           const gs = parseGameState(decoded);
           setGameState(gs);
-        } catch {
-          // account may be in transition (delegation)
+        } catch (e) {
+          // Account may be in transition during delegation — owner changes to
+          // delegation program so the discriminator no longer matches our IDL.
+          console.debug("Base subscription decode skipped:", e);
         }
       },
       "confirmed",
@@ -267,8 +362,8 @@ export function useGame() {
           );
           const gs = parseGameState(decoded);
           setGameState(gs);
-        } catch {
-          // decode error during transition
+        } catch (e) {
+          console.debug("TEE game subscription decode skipped:", e);
         }
       },
       "confirmed",
@@ -276,8 +371,11 @@ export function useGame() {
 
     // Also subscribe to own board for real-time hit updates
     if (publicKey) {
+      if (teeBoardSubRef.current !== null) {
+        teeConn.removeAccountChangeListener(teeBoardSubRef.current);
+      }
       const [myBoardPda] = getBoardPda(pda, publicKey);
-      teeConn.onAccountChange(
+      teeBoardSubRef.current = teeConn.onAccountChange(
         myBoardPda,
         (accountInfo) => {
           try {
@@ -286,8 +384,8 @@ export function useGame() {
               accountInfo.data,
             );
             setMyGrid(Array.from(decoded.grid));
-          } catch {
-            // decode error
+          } catch (e) {
+            console.warn("Board decode error:", e);
           }
         },
         "confirmed",
@@ -324,9 +422,16 @@ export function useGame() {
     const program = baseProgram();
     const gameId = gameIdBnRef.current!;
     const buyIn = new BN(pendingBuyInRef.current);
-    const invitedPlayer = pendingInvitedRef.current
-      ? new PublicKey(pendingInvitedRef.current)
-      : PublicKey.default;
+    let invitedPlayer: PublicKey;
+    try {
+      invitedPlayer = pendingInvitedRef.current
+        ? new PublicKey(pendingInvitedRef.current)
+        : PublicKey.default;
+    } catch {
+      throw new Error(
+        `Invalid invited player address: "${pendingInvitedRef.current}"`,
+      );
+    }
     const seedA = Array.from(crypto.getRandomValues(new Uint8Array(32)));
     const hashA = Array.from(boardHash);
 
@@ -527,12 +632,17 @@ export function useGame() {
       .rpc();
     addTxLog(sig, "settle_game", Date.now() - start);
 
-    // After settlement, game is back on base layer
-    if (teeSubRef.current !== null && teeRef.current) {
-      teeRef.current
-        .getConnection()
-        .removeAccountChangeListener(teeSubRef.current);
-      teeSubRef.current = null;
+    // After settlement, game is back on base layer — clean up TEE subscriptions
+    if (teeRef.current) {
+      const teeConn = teeRef.current.getConnection();
+      if (teeSubRef.current !== null) {
+        teeConn.removeAccountChangeListener(teeSubRef.current);
+        teeSubRef.current = null;
+      }
+      if (teeBoardSubRef.current !== null) {
+        teeConn.removeAccountChangeListener(teeBoardSubRef.current);
+        teeBoardSubRef.current = null;
+      }
     }
 
     // Wait for base layer to have the committed data, then fetch
@@ -705,8 +815,11 @@ export function useGame() {
     async (buyInLamports: number, invitedPlayer: string) => {
       if (!publicKey) return;
 
-      // Compute game ID and PDA
-      const gameId = new BN(Math.floor(Date.now() / 1000));
+      resetForNewGame();
+
+      // Use millisecond timestamp to avoid same-second PDA collisions.
+      // The on-chain seed is game_id as u64 LE bytes — ms fits in u64 safely.
+      const gameId = new BN(Date.now());
       const [pda] = getGamePda(publicKey, gameId);
 
       // Store pending config for placeShips to use
@@ -727,16 +840,38 @@ export function useGame() {
       if (!publicKey || !signTransaction || !signAllTransactions) return;
       try {
         const pda = new PublicKey(gameAddress);
+
+        resetForNewGame();
+
         gamePdaRef.current = pda;
         playerRoleRef.current = "b";
         setGamePda(pda);
 
-        // Fetch game to get player_a and game_id
+        // Fetch game and validate it's joinable
         const program = baseProgram();
         const decoded = await program.account.gameState.fetch(pda);
         const gs = parseGameState(decoded);
+
+        if (gs.status !== GameStatus.WaitingForPlayer) {
+          throw new Error("Game is not accepting new players");
+        }
+        if (
+          !gs.invitedPlayer.equals(PublicKey.default) &&
+          !gs.invitedPlayer.equals(publicKey)
+        ) {
+          throw new Error("You are not invited to this game");
+        }
+
         gameIdBnRef.current = new BN(gs.gameId.toString());
         setGameState(gs);
+
+        // Restore commit-reveal data if we already placed in a previous session
+        const restored = restoreCommitReveal(pda);
+        if (restored) {
+          setBoardSalt(restored.salt);
+          storedPlacementsRef.current = restored.placements;
+        }
+
         setPhase("placing");
       } catch (e) {
         console.error("Failed to join game:", e);
@@ -757,6 +892,7 @@ export function useGame() {
         const { hash, salt } = generateBoardHash(placements);
         setBoardSalt(salt);
         storedPlacementsRef.current = placements;
+        persistCommitReveal(pda, salt, placements);
 
         // Build grid for local display
         const grid = new Array(36).fill(0);
