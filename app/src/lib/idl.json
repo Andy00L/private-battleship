@@ -288,6 +288,18 @@
               }
             ]
           }
+        },
+        {
+          "name": "opponent_profile",
+          "docs": [
+            "Opponent's profile. PDA cannot be statically constrained because the",
+            "opponent depends on who the claimer is (runtime value). Validated in",
+            "the instruction body for the Placing branch, where both profiles must",
+            "be decremented. For WaitingForPlayer (no opponent) and Playing",
+            "(claim_prize handles profiles), the caller may pass any valid",
+            "PlayerProfile — it will not be modified."
+          ],
+          "writable": true
         }
       ],
       "args": []
@@ -1455,6 +1467,11 @@
       "code": 6026,
       "name": "Overflow",
       "msg": "Integer overflow"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidOpponentProfile",
+      "msg": "Opponent profile does not match the other player"
     }
   ],
   "types": [

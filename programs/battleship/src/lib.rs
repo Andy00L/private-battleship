@@ -121,6 +121,8 @@ pub enum BattleshipError {
     BoardsNotDelegated, // 6025
     #[msg("Integer overflow")]
     Overflow, // 6026
+    #[msg("Opponent profile does not match the other player")]
+    InvalidOpponentProfile, // 6027
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────────
@@ -1007,6 +1009,10 @@ pub mod battleship {
                 let refund = game.buy_in_lamports;
                 **game.to_account_info().try_borrow_mut_lamports()? -= refund;
                 **ctx.accounts.claimer.try_borrow_mut_lamports()? += refund;
+
+                // Only claimer exists — decrement their active_games
+                ctx.accounts.claimer_profile.active_games =
+                    ctx.accounts.claimer_profile.active_games.saturating_sub(1);
             }
             s if s == GameStatus::Placing as u8 => {
                 // Validate wallet addresses match game players
@@ -1018,6 +1024,22 @@ pub mod battleship {
                     ctx.accounts.player_b_wallet.key() == game.player_b,
                     BattleshipError::NotAPlayer,
                 );
+
+                // Validate opponent_profile is the correct PDA for the other player
+                let opponent = if claimer == game.player_a {
+                    game.player_b
+                } else {
+                    game.player_a
+                };
+                let (expected_opponent_pda, _) = Pubkey::find_program_address(
+                    &[PROFILE_SEED, opponent.as_ref()],
+                    &crate::ID,
+                );
+                require!(
+                    ctx.accounts.opponent_profile.key() == expected_opponent_pda,
+                    BattleshipError::InvalidOpponentProfile,
+                );
+
                 // Someone didn't place ships. Refund both (no winner).
                 game.status = GameStatus::TimedOut as u8;
                 let each = game.buy_in_lamports;
@@ -1025,6 +1047,12 @@ pub mod battleship {
                 **game.to_account_info().try_borrow_mut_lamports()? -= total;
                 **ctx.accounts.player_a_wallet.try_borrow_mut_lamports()? += each;
                 **ctx.accounts.player_b_wallet.try_borrow_mut_lamports()? += each;
+
+                // Decrement active_games for BOTH players
+                ctx.accounts.claimer_profile.active_games =
+                    ctx.accounts.claimer_profile.active_games.saturating_sub(1);
+                ctx.accounts.opponent_profile.active_games =
+                    ctx.accounts.opponent_profile.active_games.saturating_sub(1);
             }
             s if s == GameStatus::Playing as u8 => {
                 // Opponent timed out during battle. Claimer wins.
@@ -1039,14 +1067,11 @@ pub mod battleship {
                 game.status = GameStatus::TimedOut as u8;
                 game.winner = winner;
                 game.has_winner = true;
-                // Winner claims pot via claim_prize
+                // Do NOT decrement active_games here — claim_prize handles
+                // both profiles when the winner claims the pot.
             }
             _ => return Err(BattleshipError::WrongPhase.into()),
         }
-
-        // Decrement active games for claimer
-        let profile = &mut ctx.accounts.claimer_profile;
-        profile.active_games = profile.active_games.saturating_sub(1);
 
         Ok(())
     }
@@ -1477,6 +1502,15 @@ pub struct ClaimTimeout<'info> {
         bump = claimer_profile.profile_bump,
     )]
     pub claimer_profile: Account<'info, PlayerProfile>,
+
+    /// Opponent's profile. PDA cannot be statically constrained because the
+    /// opponent depends on who the claimer is (runtime value). Validated in
+    /// the instruction body for the Placing branch, where both profiles must
+    /// be decremented. For WaitingForPlayer (no opponent) and Playing
+    /// (claim_prize handles profiles), the caller may pass any valid
+    /// PlayerProfile — it will not be modified.
+    #[account(mut)]
+    pub opponent_profile: Account<'info, PlayerProfile>,
 }
 
 #[derive(Accounts)]

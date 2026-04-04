@@ -651,8 +651,8 @@ export function useGame() {
       const baseP = baseProgram();
       const decoded = await baseP.account.gameState.fetch(pda);
       setGameState(parseGameState(decoded));
-    } catch {
-      // May take longer to settle; state will still show Finished
+    } catch (e) {
+      console.debug("Post-settlement base-layer fetch not yet available:", e);
     }
   }
 
@@ -814,6 +814,7 @@ export function useGame() {
   const createGame = useCallback(
     async (buyInLamports: number, invitedPlayer: string) => {
       if (!publicKey) return;
+      if (!Number.isFinite(buyInLamports) || buyInLamports <= 0) return;
 
       resetForNewGame();
 
@@ -875,6 +876,12 @@ export function useGame() {
         setPhase("placing");
       } catch (e) {
         console.error("Failed to join game:", e);
+        // Revert state set before the error so the user isn't stuck
+        // with a stale PDA badge and dirty refs.
+        gamePdaRef.current = null;
+        playerRoleRef.current = null;
+        gameIdBnRef.current = null;
+        setGamePda(null);
       }
     },
     [publicKey, signTransaction, signAllTransactions, connection],
@@ -1045,6 +1052,13 @@ export function useGame() {
         .rpc();
 
       addTxLog(sig, "verify_board", Date.now() - start);
+
+      // Clean up commit-reveal data from sessionStorage after successful verify
+      try {
+        sessionStorage.removeItem(`battleship:${gamePda.toBase58()}`);
+      } catch {
+        // non-fatal
+      }
     } catch (e) {
       console.error("verifyBoard failed:", e);
       addTxLog("failed", "verify_board", Date.now() - start);
