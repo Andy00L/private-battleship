@@ -69,7 +69,7 @@ export function BattleGrid({
             const col = i % 6;
             const state = getCellState(cell, isOpponent);
             const isLastHit = lastHit?.row === row && lastHit?.col === col;
-            const clickable = isOpponent && state === "water" && !disabled;
+            const clickable = !!onCellClick && state === "water" && !disabled;
 
             return (
               <motion.button
@@ -78,7 +78,7 @@ export function BattleGrid({
                   w-14 h-14 rounded-md border transition-all duration-150
                   flex items-center justify-center
                   ${CELL_STYLES[state]}
-                  ${clickable ? "cursor-crosshair" : "cursor-default"}
+                  ${clickable ? (isOpponent ? "cursor-crosshair" : "cursor-pointer") : "cursor-default"}
                   ${disabled ? "opacity-50" : ""}
                 `}
                 onClick={() => clickable && onCellClick?.(row, col)}

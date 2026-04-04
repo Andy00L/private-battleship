@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
 import { useGame } from "@/hooks/useGame";
@@ -19,6 +20,7 @@ const WalletMultiButton = dynamic(
 export default function Home() {
   const { publicKey } = useWallet();
   const game = useGame();
+  const [copied, setCopied] = useState(false);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -30,8 +32,15 @@ export default function Home() {
         </h1>
         <div className="flex items-center gap-4">
           {game.gamePda && (
-            <span className="bg-slate-800/50 px-3 py-1 rounded-full text-xs font-mono text-slate-500 border border-slate-700/30">
-              {game.gamePda.toBase58().slice(0, 8)}...
+            <span
+              className="bg-slate-800/50 px-3 py-1 rounded-full text-xs font-mono text-slate-500 border border-slate-700/30 cursor-pointer hover:border-cyan-400/50 hover:text-slate-400 transition-colors"
+              onClick={() => {
+                navigator.clipboard.writeText(game.gamePda!.toBase58());
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+            >
+              {copied ? "Copied!" : `${game.gamePda.toBase58().slice(0, 8)}...`}
             </span>
           )}
           <WalletMultiButton />
