@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{action, commit, ephemeral};
+use ephemeral_rollups_sdk::anchor::{action, commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::access_control::instructions::{
     CommitAndUndelegatePermissionCpiBuilder, CreatePermissionCpiBuilder,
-    DelegatePermissionCpiBuilder, UpdatePermissionCpiBuilder,
+    UpdatePermissionCpiBuilder,
 };
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::access_control::structs::{
     Member, MembersArgs, AUTHORITY_FLAG, TX_BALANCES_FLAG, TX_LOGS_FLAG, TX_MESSAGE_FLAG,
 };
@@ -18,6 +19,13 @@ use ephemeral_vrf_sdk::instructions::{create_request_randomness_ix, RequestRando
 use ephemeral_vrf_sdk::types::SerializableAccountMeta;
 
 declare_id!("9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR");
+
+/// Devnet TEE validator. Source: MagicBlock devnet infrastructure.
+/// All delegations MUST target this validator for Private ER privacy.
+#[allow(unused_imports)]
+use anchor_lang::solana_program::pubkey;
+pub const TEE_VALIDATOR_PUBKEY: Pubkey =
+    pubkey!("FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA");
 
 // ── Seeds ──────────────────────────────────────────────────────────────────────
 
@@ -123,6 +131,12 @@ pub enum BattleshipError {
     Overflow, // 6026
     #[msg("Opponent profile does not match the other player")]
     InvalidOpponentProfile, // 6027
+    #[msg("Account is already delegated (not owned by this program)")]
+    AccountAlreadyDelegated, // 6028
+    #[msg("Game PDA does not match expected derivation")]
+    InvalidGamePda, // 6029
+    #[msg("TEE validator address does not match expected devnet TEE")]
+    InvalidTeeValidator, // 6030
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────────
@@ -475,42 +489,62 @@ pub mod battleship {
     // ── 6. delegate_board ──────────────────────────────────────────────────
 
     pub fn delegate_board(ctx: Context<DelegateBoard>) -> Result<()> {
-        let game = &mut ctx.accounts.game;
+        // 1. Owner check: board must still be owned by this program (not already delegated)
+        require!(
+            ctx.accounts.pda.owner == &crate::ID,
+            BattleshipError::AccountAlreadyDelegated,
+        );
+
+        // Read game data before delegation (avoid borrow conflicts with delegate_pda)
         let player = ctx.accounts.player.key();
+        let game_key = ctx.accounts.game.key();
+        let player_a = ctx.accounts.game.player_a;
+        let player_b = ctx.accounts.game.player_b;
+        let status = ctx.accounts.game.status;
+        let boards_delegated = ctx.accounts.game.boards_delegated;
 
         require!(
-            player == game.player_a || player == game.player_b,
+            player == player_a || player == player_b,
             BattleshipError::NotAPlayer,
         );
         require!(
-            game.status == GameStatus::Placing as u8,
+            status == GameStatus::Placing as u8,
             BattleshipError::WrongPhase,
         );
         require!(
-            game.boards_delegated < 2,
+            boards_delegated < 2,
             BattleshipError::BoardsNotDelegated,
         );
 
-        // Delegate permission to TEE validator
-        DelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .payer(&ctx.accounts.player)
-            .authority(&ctx.accounts.player, true)
-            .permissioned_account(&ctx.accounts.player_board.to_account_info(), false)
-            .permission(&ctx.accounts.permission)
-            .system_program(&ctx.accounts.system_program)
-            .owner_program(&ctx.accounts.owner_program)
-            .delegation_buffer(&ctx.accounts.delegation_buffer)
-            .delegation_record(&ctx.accounts.delegation_record)
-            .delegation_metadata(&ctx.accounts.delegation_metadata)
-            .delegation_program(&ctx.accounts.delegation_program)
-            .validator(Some(&ctx.accounts.tee_validator))
-            .invoke_signed(&[&[
-                BOARD_SEED,
-                game.key().as_ref(),
-                player.as_ref(),
-                &[ctx.accounts.player_board.board_bump],
-            ]])?;
+        // 2. PDA re-derivation: verify the board PDA matches expected seeds
+        let (expected_board, _) = Pubkey::find_program_address(
+            &[BOARD_SEED, game_key.as_ref(), player.as_ref()],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.pda.key() == expected_board,
+            BattleshipError::NotYourBoard,
+        );
 
+        // Delegate board to TEE via Delegation Program (seeds without bump)
+        let seeds: Vec<Vec<u8>> = vec![
+            BOARD_SEED.to_vec(),
+            game_key.to_bytes().to_vec(),
+            player.to_bytes().to_vec(),
+        ];
+        let seeds_refs: Vec<&[u8]> = seeds.iter().map(|s| s.as_slice()).collect();
+
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.player,
+            &seeds_refs,
+            DelegateConfig {
+                validator: Some(ctx.accounts.tee_validator.key()),
+                ..Default::default()
+            },
+        )?;
+
+        // Update game state after delegation completes
+        let game = &mut ctx.accounts.game;
         game.boards_delegated += 1;
         game.last_action_ts = Clock::get()?.unix_timestamp;
 
@@ -520,7 +554,35 @@ pub mod battleship {
     // ── 7. delegate_game_state ─────────────────────────────────────────────
 
     pub fn delegate_game_state(ctx: Context<DelegateGameState>) -> Result<()> {
-        let game = &ctx.accounts.game;
+        // Manual deserialization with full safety checks (can't use typed Account
+        // because delegation zeroes data and changes owner, which would fail
+        // Anchor's post-instruction serialization).
+
+        let pda_info = &ctx.accounts.pda;
+
+        // Step 1: Owner check (prevents deserializing data from foreign programs)
+        require!(
+            pda_info.owner == &crate::ID,
+            BattleshipError::AccountAlreadyDelegated,
+        );
+
+        // Step 2: Size check (prevents out-of-bounds read)
+        require!(
+            pda_info.data_len() >= GAME_STATE_SIZE,
+            BattleshipError::InvalidGamePda,
+        );
+
+        // Step 3: Deserialize (try_deserialize checks the 8-byte discriminator)
+        let data = pda_info.try_borrow_data()?;
+        let mut data_slice: &[u8] = &data;
+        let game = GameState::try_deserialize(&mut data_slice)?;
+        drop(data);
+
+        // Step 4: Field validation (player_a must not be default in a real game)
+        require!(
+            game.player_a != Pubkey::default(),
+            BattleshipError::InvalidGamePda,
+        );
 
         require!(
             game.status == GameStatus::Placing as u8,
@@ -531,9 +593,19 @@ pub mod battleship {
             BattleshipError::BoardsNotDelegated,
         );
 
-        // Create public permission for GameState (members: None = public)
+        // Step 5: PDA re-derivation (proves account was created by our program)
+        let (expected_pda, bump) = Pubkey::find_program_address(
+            &[GAME_SEED, game.player_a.as_ref(), &game.game_id.to_le_bytes()],
+            &crate::ID,
+        );
+        require!(
+            pda_info.key() == expected_pda,
+            BattleshipError::InvalidGamePda,
+        );
+
+        // Create public permission for GameState (before delegation changes owner)
         CreatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .permissioned_account(&ctx.accounts.game.to_account_info())
+            .permissioned_account(pda_info)
             .permission(&ctx.accounts.game_permission)
             .payer(&ctx.accounts.payer)
             .system_program(&ctx.accounts.system_program)
@@ -542,28 +614,25 @@ pub mod battleship {
                 GAME_SEED,
                 game.player_a.as_ref(),
                 &game.game_id.to_le_bytes(),
-                &[game.game_bump],
+                &[bump],
             ]])?;
 
-        // Delegate GameState to TEE validator
-        DelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .payer(&ctx.accounts.payer)
-            .authority(&ctx.accounts.payer, false)
-            .permissioned_account(&ctx.accounts.game.to_account_info(), true)
-            .permission(&ctx.accounts.game_permission)
-            .system_program(&ctx.accounts.system_program)
-            .owner_program(&ctx.accounts.owner_program)
-            .delegation_buffer(&ctx.accounts.delegation_buffer)
-            .delegation_record(&ctx.accounts.delegation_record)
-            .delegation_metadata(&ctx.accounts.delegation_metadata)
-            .delegation_program(&ctx.accounts.delegation_program)
-            .validator(Some(&ctx.accounts.tee_validator))
-            .invoke_signed(&[&[
-                GAME_SEED,
-                game.player_a.as_ref(),
-                &game.game_id.to_le_bytes(),
-                &[game.game_bump],
-            ]])?;
+        // Delegate GameState to TEE via Delegation Program (seeds without bump)
+        let seeds: Vec<Vec<u8>> = vec![
+            GAME_SEED.to_vec(),
+            game.player_a.to_bytes().to_vec(),
+            game.game_id.to_le_bytes().to_vec(),
+        ];
+        let seeds_refs: Vec<&[u8]> = seeds.iter().map(|s| s.as_slice()).collect();
+
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &seeds_refs,
+            DelegateConfig {
+                validator: Some(ctx.accounts.tee_validator.key()),
+                ..Default::default()
+            },
+        )?;
 
         Ok(())
     }
@@ -1270,6 +1339,7 @@ pub struct CancelGame<'info> {
     pub player_profile: Account<'info, PlayerProfile>,
 }
 
+#[delegate]
 #[derive(Accounts)]
 pub struct DelegateBoard<'info> {
     #[account(mut)]
@@ -1282,48 +1352,24 @@ pub struct DelegateBoard<'info> {
     )]
     pub game: Account<'info, GameState>,
 
-    #[account(
-        mut,
-        seeds = [BOARD_SEED, game.key().as_ref(), player.key().as_ref()],
-        bump = player_board.board_bump,
-        constraint = player_board.owner == player.key() @ BattleshipError::NotYourBoard,
-    )]
-    pub player_board: Account<'info, PlayerBoard>,
+    /// CHECK: Board PDA to delegate. Owner + PDA validated in instruction body.
+    #[account(mut, del)]
+    pub pda: AccountInfo<'info>,
 
-    /// CHECK: Permission PDA for this board
-    #[account(mut)]
-    pub permission: AccountInfo<'info>,
-    /// CHECK: Permission Program (ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1)
-    pub permission_program: AccountInfo<'info>,
-    pub system_program: Program<'info, System>,
-    /// CHECK: Our own program (owner of the board account)
-    pub owner_program: AccountInfo<'info>,
-    /// CHECK: Delegation buffer PDA
-    #[account(mut)]
-    pub delegation_buffer: AccountInfo<'info>,
-    /// CHECK: Delegation record PDA
-    #[account(mut)]
-    pub delegation_record: AccountInfo<'info>,
-    /// CHECK: Delegation metadata PDA
-    #[account(mut)]
-    pub delegation_metadata: AccountInfo<'info>,
-    /// CHECK: Delegation Program (DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh)
-    pub delegation_program: AccountInfo<'info>,
-    /// CHECK: TEE Validator (FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA)
+    /// CHECK: TEE validator address verified by constraint
+    #[account(address = TEE_VALIDATOR_PUBKEY @ BattleshipError::InvalidTeeValidator)]
     pub tee_validator: AccountInfo<'info>,
 }
 
+#[delegate]
 #[derive(Accounts)]
 pub struct DelegateGameState<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(
-        mut,
-        seeds = [GAME_SEED, game.player_a.as_ref(), &game.game_id.to_le_bytes()],
-        bump = game.game_bump,
-    )]
-    pub game: Account<'info, GameState>,
+    /// CHECK: Game PDA to delegate. Owner + PDA validated in instruction body.
+    #[account(mut, del)]
+    pub pda: AccountInfo<'info>,
 
     /// CHECK: Permission PDA for game state
     #[account(mut)]
@@ -1331,20 +1377,9 @@ pub struct DelegateGameState<'info> {
     /// CHECK: Permission Program
     pub permission_program: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
-    /// CHECK: Our own program
-    pub owner_program: AccountInfo<'info>,
-    /// CHECK: Delegation buffer PDA
-    #[account(mut)]
-    pub delegation_buffer: AccountInfo<'info>,
-    /// CHECK: Delegation record PDA
-    #[account(mut)]
-    pub delegation_record: AccountInfo<'info>,
-    /// CHECK: Delegation metadata PDA
-    #[account(mut)]
-    pub delegation_metadata: AccountInfo<'info>,
-    /// CHECK: Delegation Program
-    pub delegation_program: AccountInfo<'info>,
-    /// CHECK: TEE Validator
+
+    /// CHECK: TEE validator address verified by constraint
+    #[account(address = TEE_VALIDATOR_PUBKEY @ BattleshipError::InvalidTeeValidator)]
     pub tee_validator: AccountInfo<'info>,
 }
 

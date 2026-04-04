@@ -9,7 +9,6 @@ import { generateBoardHash } from "@/lib/board-hash";
 import {
   PROGRAM_ID,
   PERMISSION_PROGRAM_ID,
-  DELEGATION_PROGRAM_ID,
   TEE_VALIDATOR,
   MAGIC_PROGRAM_ID,
   MAGIC_CONTEXT_ID,
@@ -22,9 +21,6 @@ import {
   getLeaderboardPda,
   getProgramIdentityPda,
   getPermissionPda,
-  getDelegationRecordPda,
-  getDelegationMetadataPda,
-  getDelegationBufferPda,
   getProgram,
 } from "@/lib/program";
 import type { AnchorWallet } from "@/lib/program";
@@ -40,6 +36,15 @@ const GameStatus = {
   Cancelled: 4,
   TimedOut: 5,
 } as const;
+
+/** Anchor error code for AccountAlreadyDelegated (6028). Hex: 0x1794 + offset. */
+const ERR_ALREADY_DELEGATED = 6028;
+
+/** Check if an Anchor/Solana error contains a specific custom program error code. */
+function hasErrorCode(e: unknown, code: number): boolean {
+  const s = String(e);
+  return s.includes(`custom program error: 0x${code.toString(16)}`) || s.includes(`Error Code: ${code}`);
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -194,6 +199,18 @@ export function useGame() {
     setBoardSalt(null);
     setShipsPlaced(false);
     setPrizeClaimed(false);
+
+    // Clean up stale sessionStorage entries from previous games
+    try {
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key?.startsWith("battleship:")) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // sessionStorage unavailable — non-fatal
+    }
   }
 
   // ── Session persistence for commit-reveal data ──────────────────────────
@@ -491,27 +508,18 @@ export function useGame() {
     setGameState(parseGameState(decoded));
   }
 
-  async function delegateMyBoard(pda: PublicKey): Promise<void> {
+  async function delegateMyBoard(gamePda: PublicKey): Promise<void> {
     if (!publicKey) return;
     const program = baseProgram();
-    const [boardPda] = getBoardPda(pda, publicKey);
-    const permissionPda = getPermissionPda(boardPda);
+    const [boardPda] = getBoardPda(gamePda, publicKey);
 
     const start = Date.now();
     const sig = await program.methods
       .delegateBoard()
       .accounts({
         player: publicKey,
-        game: pda,
-        playerBoard: boardPda,
-        permission: permissionPda,
-        permissionProgram: PERMISSION_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        ownerProgram: PROGRAM_ID,
-        delegationBuffer: getDelegationBufferPda(permissionPda, PERMISSION_PROGRAM_ID),
-        delegationRecord: getDelegationRecordPda(permissionPda),
-        delegationMetadata: getDelegationMetadataPda(permissionPda),
-        delegationProgram: DELEGATION_PROGRAM_ID,
+        game: gamePda,
+        pda: boardPda,
         teeValidator: TEE_VALIDATOR,
       })
       .rpc();
@@ -539,25 +547,19 @@ export function useGame() {
     addTxLog(sig, "request_turn_order", Date.now() - start);
   }
 
-  async function delegateGameStateTx(pda: PublicKey): Promise<void> {
+  async function delegateGameStateTx(gamePda: PublicKey): Promise<void> {
     if (!publicKey) return;
     const program = baseProgram();
-    const gamePermission = getPermissionPda(pda);
+    const gamePermission = getPermissionPda(gamePda);
 
     const start = Date.now();
     const sig = await program.methods
       .delegateGameState()
       .accounts({
         payer: publicKey,
-        game: pda,
+        pda: gamePda,
         gamePermission,
         permissionProgram: PERMISSION_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        ownerProgram: PROGRAM_ID,
-        delegationBuffer: getDelegationBufferPda(gamePermission, PERMISSION_PROGRAM_ID),
-        delegationRecord: getDelegationRecordPda(gamePermission),
-        delegationMetadata: getDelegationMetadataPda(gamePermission),
-        delegationProgram: DELEGATION_PROGRAM_ID,
         teeValidator: TEE_VALIDATOR,
       })
       .rpc();
@@ -692,10 +694,12 @@ export function useGame() {
             await delegateMyBoard(pda);
             boardDelegatedRef.current = true;
           } catch (e) {
-            // Don't set flag on failure — the next orchestration cycle
-            // (triggered by subscription) will retry. This handles transient
-            // network errors correctly instead of permanently skipping the step.
-            console.warn("delegate_board failed, will retry:", e);
+            if (hasErrorCode(e, ERR_ALREADY_DELEGATED)) {
+              // Board was already delegated (e.g., page refresh mid-game). Skip.
+              boardDelegatedRef.current = true;
+            } else {
+              console.warn("delegate_board failed, will retry:", e);
+            }
           }
         }
 
@@ -724,7 +728,11 @@ export function useGame() {
             await delegateGameStateTx(pda);
             gameStateDelegatedRef.current = true;
           } catch (e) {
-            console.warn("delegate_game_state failed, will retry:", e);
+            if (hasErrorCode(e, ERR_ALREADY_DELEGATED)) {
+              gameStateDelegatedRef.current = true;
+            } else {
+              console.warn("delegate_game_state failed, will retry:", e);
+            }
           }
 
           // Switch to TEE subscription only if delegation succeeded
@@ -848,9 +856,25 @@ export function useGame() {
         setGamePda(pda);
 
         // Fetch game and validate it's joinable
-        const program = baseProgram();
-        const decoded = await program.account.gameState.fetch(pda);
+        let decoded;
+        try {
+          const program = baseProgram();
+          decoded = await program.account.gameState.fetch(pda);
+        } catch {
+          throw new Error(
+            "Game not found. It may have expired or the program was redeployed.",
+          );
+        }
         const gs = parseGameState(decoded);
+
+        // Terminal states: clear stale data and reject
+        if (
+          gs.status === GameStatus.Finished ||
+          gs.status === GameStatus.Cancelled ||
+          gs.status === GameStatus.TimedOut
+        ) {
+          throw new Error("Game has already ended");
+        }
 
         if (gs.status !== GameStatus.WaitingForPlayer) {
           throw new Error("Game is not accepting new players");
@@ -875,12 +899,12 @@ export function useGame() {
         setPhase("placing");
       } catch (e) {
         console.error("Failed to join game:", e);
-        // Revert state set before the error so the user isn't stuck
-        // with a stale PDA badge and dirty refs.
+        // Revert all state so the user returns cleanly to lobby
         gamePdaRef.current = null;
         playerRoleRef.current = null;
         gameIdBnRef.current = null;
         setGamePda(null);
+        setPhase("lobby");
       }
     },
     [publicKey, signTransaction, signAllTransactions, connection],

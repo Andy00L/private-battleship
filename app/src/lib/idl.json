@@ -488,7 +488,7 @@
           }
         },
         {
-          "name": "player_board",
+          "name": "buffer_pda",
           "writable": true,
           "pda": {
             "seeds": [
@@ -496,54 +496,147 @@
                 "kind": "const",
                 "value": [
                   98,
-                  111,
-                  97,
-                  114,
-                  100
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
                 ]
               },
               {
                 "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
+                "path": "pda"
               }
-            ]
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                122,
+                31,
+                12,
+                179,
+                219,
+                163,
+                78,
+                77,
+                217,
+                92,
+                3,
+                106,
+                218,
+                188,
+                250,
+                158,
+                235,
+                211,
+                211,
+                19,
+                131,
+                206,
+                135,
+                5,
+                203,
+                111,
+                99,
+                240,
+                152,
+                103,
+                204,
+                232
+              ]
+            }
           }
         },
         {
-          "name": "permission",
+          "name": "delegation_record_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "pda",
           "writable": true
         },
         {
-          "name": "permission_program"
+          "name": "tee_validator",
+          "address": "FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA"
+        },
+        {
+          "name": "owner_program",
+          "address": "9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
         },
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "owner_program"
-        },
-        {
-          "name": "delegation_buffer",
-          "writable": true
-        },
-        {
-          "name": "delegation_record",
-          "writable": true
-        },
-        {
-          "name": "delegation_metadata",
-          "writable": true
-        },
-        {
-          "name": "delegation_program"
-        },
-        {
-          "name": "tee_validator"
         }
       ],
       "args": []
@@ -567,31 +660,139 @@
           "signer": true
         },
         {
-          "name": "game",
+          "name": "buffer_pda",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  103,
-                  97,
-                  109,
-                  101
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
                 ]
               },
               {
                 "kind": "account",
-                "path": "game.player_a",
-                "account": "GameState"
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                122,
+                31,
+                12,
+                179,
+                219,
+                163,
+                78,
+                77,
+                217,
+                92,
+                3,
+                106,
+                218,
+                188,
+                250,
+                158,
+                235,
+                211,
+                211,
+                19,
+                131,
+                206,
+                135,
+                5,
+                203,
+                111,
+                99,
+                240,
+                152,
+                103,
+                204,
+                232
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
               },
               {
                 "kind": "account",
-                "path": "game.game_id",
-                "account": "GameState"
+                "path": "pda"
               }
-            ]
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
           }
+        },
+        {
+          "name": "delegation_metadata_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "pda",
+          "writable": true
         },
         {
           "name": "game_permission",
@@ -605,25 +806,16 @@
           "address": "11111111111111111111111111111111"
         },
         {
-          "name": "owner_program"
+          "name": "tee_validator",
+          "address": "FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA"
         },
         {
-          "name": "delegation_buffer",
-          "writable": true
+          "name": "owner_program",
+          "address": "9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR"
         },
         {
-          "name": "delegation_record",
-          "writable": true
-        },
-        {
-          "name": "delegation_metadata",
-          "writable": true
-        },
-        {
-          "name": "delegation_program"
-        },
-        {
-          "name": "tee_validator"
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
         }
       ],
       "args": []
@@ -1472,6 +1664,21 @@
       "code": 6027,
       "name": "InvalidOpponentProfile",
       "msg": "Opponent profile does not match the other player"
+    },
+    {
+      "code": 6028,
+      "name": "AccountAlreadyDelegated",
+      "msg": "Account is already delegated (not owned by this program)"
+    },
+    {
+      "code": 6029,
+      "name": "InvalidGamePda",
+      "msg": "Game PDA does not match expected derivation"
+    },
+    {
+      "code": 6030,
+      "name": "InvalidTeeValidator",
+      "msg": "TEE validator address does not match expected devnet TEE"
     }
   ],
   "types": [
