@@ -692,8 +692,10 @@ export function useGame() {
             await delegateMyBoard(pda);
             boardDelegatedRef.current = true;
           } catch (e) {
-            console.warn("delegate_board failed (may already be done):", e);
-            boardDelegatedRef.current = true;
+            // Don't set flag on failure — the next orchestration cycle
+            // (triggered by subscription) will retry. This handles transient
+            // network errors correctly instead of permanently skipping the step.
+            console.warn("delegate_board failed, will retry:", e);
           }
         }
 
@@ -707,8 +709,7 @@ export function useGame() {
             await requestVrfTurnOrder(pda);
             vrfRequestedRef.current = true;
           } catch (e) {
-            console.warn("request_turn_order failed (may be duplicate):", e);
-            vrfRequestedRef.current = true;
+            console.warn("request_turn_order failed, will retry:", e);
           }
         }
 
@@ -723,17 +724,15 @@ export function useGame() {
             await delegateGameStateTx(pda);
             gameStateDelegatedRef.current = true;
           } catch (e) {
-            console.warn(
-              "delegate_game_state failed (may already be done):",
-              e,
-            );
-            gameStateDelegatedRef.current = true;
+            console.warn("delegate_game_state failed, will retry:", e);
           }
 
-          // Switch to TEE subscription
-          await sleep(2000);
-          if (!cancelled) {
-            setupTeeSubscription(pda);
+          // Switch to TEE subscription only if delegation succeeded
+          if (gameStateDelegatedRef.current) {
+            await sleep(2000);
+            if (!cancelled) {
+              setupTeeSubscription(pda);
+            }
           }
         }
 
