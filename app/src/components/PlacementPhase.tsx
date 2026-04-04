@@ -1,0 +1,239 @@
+"use client";
+
+import { useState, useCallback, useEffect } from "react";
+import { BattleGrid } from "./BattleGrid";
+
+const SHIP_SIZES = [3, 2, 2, 1, 1] as const;
+const SHIP_NAMES = ["Cruiser", "Destroyer", "Destroyer", "Scout", "Scout"];
+
+interface ShipToPlace {
+  size: number;
+  placed: boolean;
+  startRow: number;
+  startCol: number;
+  horizontal: boolean;
+}
+
+interface PlacementPhaseProps {
+  onConfirm: (
+    placements: {
+      startRow: number;
+      startCol: number;
+      size: number;
+      horizontal: boolean;
+    }[],
+  ) => void;
+  confirmed: boolean;
+}
+
+function canPlace(
+  grid: number[],
+  row: number,
+  col: number,
+  size: number,
+  horizontal: boolean,
+): boolean {
+  for (let i = 0; i < size; i++) {
+    const r = horizontal ? row : row + i;
+    const c = horizontal ? col + i : col;
+    if (r >= 6 || c >= 6) return false;
+    if (grid[r * 6 + c] !== 0) return false;
+  }
+  return true;
+}
+
+export function PlacementPhase({ onConfirm, confirmed }: PlacementPhaseProps) {
+  const [ships, setShips] = useState<ShipToPlace[]>(
+    SHIP_SIZES.map((size) => ({
+      size,
+      placed: false,
+      startRow: 0,
+      startCol: 0,
+      horizontal: true,
+    })),
+  );
+  const [selectedShip, setSelectedShip] = useState(0);
+  const [horizontal, setHorizontal] = useState(true);
+  const [grid, setGrid] = useState<number[]>(new Array(36).fill(0));
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "r" || e.key === "R") setHorizontal((h) => !h);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      if (confirmed) return;
+      const ship = ships[selectedShip];
+      if (!ship || ship.placed) return;
+      if (!canPlace(grid, row, col, ship.size, horizontal)) return;
+
+      const newGrid = [...grid];
+      for (let i = 0; i < ship.size; i++) {
+        const r = horizontal ? row : row + i;
+        const c = horizontal ? col + i : col;
+        newGrid[r * 6 + c] = 1;
+      }
+      setGrid(newGrid);
+
+      const newShips = [...ships];
+      newShips[selectedShip] = {
+        ...ship,
+        placed: true,
+        startRow: row,
+        startCol: col,
+        horizontal,
+      };
+      setShips(newShips);
+
+      const next = newShips.findIndex((s) => !s.placed);
+      if (next !== -1) setSelectedShip(next);
+    },
+    [grid, ships, selectedShip, horizontal, confirmed],
+  );
+
+  const handleReset = () => {
+    setGrid(new Array(36).fill(0));
+    setShips(
+      SHIP_SIZES.map((size) => ({
+        size,
+        placed: false,
+        startRow: 0,
+        startCol: 0,
+        horizontal: true,
+      })),
+    );
+    setSelectedShip(0);
+  };
+
+  const allPlaced = ships.every((s) => s.placed);
+
+  const handleConfirm = () => {
+    if (!allPlaced) return;
+    onConfirm(
+      ships.map((s) => ({
+        startRow: s.startRow,
+        startCol: s.startCol,
+        size: s.size,
+        horizontal: s.horizontal,
+      })),
+    );
+  };
+
+  return (
+    <div className="min-h-[calc(100vh-64px)] flex flex-col items-center justify-center gap-8 px-6 py-8">
+      <div>
+        <p className="text-xs font-mono tracking-widest text-slate-600 uppercase text-center mb-1">
+          Deployment Phase
+        </p>
+        <h2 className="text-xl font-mono font-semibold text-slate-200 text-center tracking-wider">
+          PLACE YOUR SHIPS
+        </h2>
+      </div>
+
+      <div className="flex gap-10 items-start">
+        {/* Grid */}
+        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-5">
+          <BattleGrid
+            grid={grid}
+            isOpponent={false}
+            onCellClick={handleCellClick}
+            disabled={confirmed}
+          />
+        </div>
+
+        {/* Ship palette */}
+        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-5 min-w-[220px] space-y-4">
+          <h3 className="flex items-center gap-2 text-xs font-mono tracking-widest text-slate-500 uppercase">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+            Fleet Roster
+          </h3>
+
+          <div className="space-y-2">
+            {ships.map((ship, i) => (
+              <button
+                key={i}
+                onClick={() => !ship.placed && setSelectedShip(i)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-sm font-mono transition-all duration-200 ${
+                  ship.placed
+                    ? "border-emerald-800/40 text-emerald-600/60"
+                    : i === selectedShip
+                      ? "border-cyan-500/50 text-cyan-400 bg-cyan-950/20 shadow-[0_0_12px_rgba(34,211,238,0.08)]"
+                      : "border-slate-700/30 text-slate-400 hover:border-slate-600/40"
+                }`}
+                disabled={ship.placed || confirmed}
+              >
+                <span className="flex gap-0.5">
+                  {Array.from({ length: ship.size }).map((_, j) => (
+                    <span
+                      key={j}
+                      className={`w-3.5 h-3.5 rounded-sm ${
+                        ship.placed
+                          ? "bg-emerald-700/50"
+                          : i === selectedShip
+                            ? "bg-cyan-500/60"
+                            : "bg-slate-600/50"
+                      }`}
+                    />
+                  ))}
+                </span>
+                <span className="text-xs">
+                  {SHIP_NAMES[i]} ({ship.size})
+                </span>
+                {ship.placed && (
+                  <span className="ml-auto text-emerald-500 text-xs">
+                    &#10003;
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          <div className="border-t border-slate-700/20 pt-3 space-y-2">
+            <button
+              onClick={() => setHorizontal((h) => !h)}
+              className="w-full h-10 border border-slate-700/30 rounded-lg text-xs font-mono text-slate-400 hover:border-slate-600/40 transition-all"
+              disabled={confirmed}
+            >
+              {horizontal ? "HORIZONTAL" : "VERTICAL"}{" "}
+              <span className="text-slate-600">/ R to rotate</span>
+            </button>
+
+            <button
+              onClick={handleReset}
+              className="w-full h-10 border border-slate-700/30 rounded-lg text-xs font-mono text-slate-600 hover:text-slate-400 transition-all"
+              disabled={confirmed}
+            >
+              RESET ALL
+            </button>
+          </div>
+
+          {allPlaced && !confirmed && (
+            <button
+              onClick={handleConfirm}
+              className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-mono font-semibold h-12 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 transition-all duration-200 text-sm tracking-wider"
+            >
+              CONFIRM PLACEMENT
+            </button>
+          )}
+          {!allPlaced && !confirmed && (
+            <p className="text-[10px] font-mono text-slate-600 text-center">
+              Place all 5 ships to continue
+            </p>
+          )}
+          {confirmed && (
+            <div className="flex items-center gap-2 justify-center py-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <p className="text-emerald-400 font-mono text-xs">
+                Deployed. Awaiting opponent...
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

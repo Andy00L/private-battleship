@@ -1,2 +1,7 @@
+target/
+node_modules/
 .claude/
-app/
+CLAUDE.md
+.next/
+*.Zone.Identifier
+.DS_Store
