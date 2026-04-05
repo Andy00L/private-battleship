@@ -170,19 +170,19 @@ export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, 
   };
 
   return (
-    <div className="min-h-[calc(100vh-64px)] flex flex-col items-center justify-center gap-8 px-6 py-8">
+    <div className="min-h-[calc(100vh-56px)] flex flex-col items-center justify-center gap-8 px-8 py-8">
       <div>
-        <p className="text-xs font-mono tracking-widest text-slate-600 uppercase text-center mb-1">
+        <p className="text-game-label text-center mb-1">
           Deployment Phase
         </p>
-        <h2 className="text-xl font-mono font-semibold text-slate-200 text-center tracking-wider">
+        <h2 className="text-game-heading text-2xl font-mono text-white text-center tracking-wider">
           PLACE YOUR SHIPS
         </h2>
       </div>
 
       <div className="flex gap-10 items-start">
         {/* Grid */}
-        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-5">
+        <div className="glass-panel p-6">
           <BattleGrid
             grid={grid}
             isOpponent={false}
@@ -193,7 +193,7 @@ export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, 
         </div>
 
         {/* Ship palette */}
-        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-5 min-w-[220px] space-y-4">
+        <div className="glass-panel p-6 min-w-[220px] space-y-4">
           <h3 className="flex items-center gap-2 text-xs font-mono tracking-widest text-slate-500 uppercase">
             <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
             Fleet Roster
@@ -259,10 +259,7 @@ export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, 
           </div>
 
           {allPlaced && !confirmed && (
-            <button
-              onClick={handleConfirm}
-              className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-mono font-semibold h-12 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 transition-all duration-200 text-sm tracking-wider"
-            >
+            <button onClick={handleConfirm} className="btn-primary w-full">
               CONFIRM PLACEMENT
             </button>
           )}

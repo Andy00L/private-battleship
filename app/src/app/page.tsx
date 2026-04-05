@@ -27,15 +27,16 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800/60 shadow-[0_1px_0_rgba(34,211,238,0.05)]">
-        <h1 className="text-lg font-mono font-semibold tracking-wider">
+      <header className="glass-panel-strong fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-8 py-3" style={{ borderRadius: 0, borderTop: "none", borderLeft: "none", borderRight: "none", borderBottom: "1px solid rgba(6,182,212,0.1)" }}>
+        <h1 className="text-game-heading text-xl font-mono tracking-[0.15em]">
           <span className="text-cyan-400">PRIVATE</span>{" "}
-          <span className="text-slate-300">BATTLESHIP</span>
+          <span className="text-white">BATTLESHIP</span>
         </h1>
         <div className="flex items-center gap-4">
           {game.gamePda && (
             <span
-              className="bg-slate-800/50 px-3 py-1 rounded-full text-xs font-mono text-slate-500 border border-slate-700/30 cursor-pointer hover:border-cyan-400/50 hover:text-slate-400 transition-colors"
+              className="glass-panel px-3 py-1.5 text-xs font-mono text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors"
+              style={{ borderRadius: 20 }}
               onClick={() => {
                 navigator.clipboard.writeText(game.gamePda!.toBase58());
                 setCopied(true);
@@ -59,8 +60,8 @@ export default function Home() {
       {/* Game background video (placement, battle, result phases) */}
       {game.phase !== "lobby" && <GameBackground />}
 
-      {/* Main content (text-shadow for readability over video background) */}
-      <main className="flex-1" style={{ textShadow: "0 1px 3px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.4)" }}>
+      {/* Main content */}
+      <main className="flex-1 text-game pt-14">
         {game.phase === "lobby" && (
           <div className="relative overflow-hidden">
             <HeroVideo />

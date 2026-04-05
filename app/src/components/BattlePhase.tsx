@@ -93,10 +93,10 @@ export function BattlePhase({
     <div className="flex gap-6 px-6 py-8 items-start justify-center flex-wrap xl:flex-nowrap">
       {/* Left: My fleet */}
       <div className="flex flex-col items-center gap-3">
-        <h3 className="text-xs font-mono tracking-widest text-slate-500 uppercase">
+        <h3 className="text-game-label">
           Your Fleet
         </h3>
-        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-4">
+        <div className="glass-panel p-5">
           <BattleGrid grid={myGrid} isOpponent={false} disabled shipPlacements={myShipPlacements} />
         </div>
         <div className="flex items-center gap-2">
@@ -131,10 +131,10 @@ export function BattlePhase({
 
       {/* Right: Enemy waters */}
       <div className="flex flex-col items-center gap-3">
-        <h3 className="text-xs font-mono tracking-widest text-slate-500 uppercase">
+        <h3 className="text-game-label">
           Enemy Waters
         </h3>
-        <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-4">
+        <div className="glass-panel p-5">
           <BattleGrid
             grid={opponentHits}
             isOpponent

@@ -67,7 +67,7 @@ export function ResultPhase({
       {/* Final result (after settle + claim done) */}
       {(isDone || showManualClaim || endGameStatus === "error") && (
         <>
-          <p className="text-xs font-mono tracking-[0.3em] text-slate-600 uppercase">
+          <p className="text-game-label tracking-[0.3em]">
             Game Over
           </p>
 
@@ -78,11 +78,12 @@ export function ResultPhase({
             className="text-center"
           >
             <h2
-              className={`text-4xl font-mono font-bold tracking-wider ${
+              className={`text-5xl font-mono font-black tracking-wider ${
                 isWinner
-                  ? "bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent"
-                  : "text-red-400"
+                  ? "bg-gradient-to-r from-cyan-400 via-blue-400 to-cyan-300 bg-clip-text text-transparent"
+                  : "bg-gradient-to-r from-red-400 to-red-600 bg-clip-text text-transparent"
               }`}
+              style={{ textShadow: isWinner ? "0 0 40px rgba(6,182,212,0.4)" : "0 0 40px rgba(239,68,68,0.3)" }}
             >
               {isWinner ? "VICTORY" : "DEFEAT"}
             </h2>
@@ -100,7 +101,7 @@ export function ResultPhase({
               <h3 className="text-xs font-mono tracking-widest text-slate-500 uppercase">
                 Your Board
               </h3>
-              <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-4">
+              <div className="glass-panel p-5">
                 <BattleGrid grid={myGrid} isOpponent={false} disabled shipPlacements={myShipPlacements} />
               </div>
             </div>
@@ -108,7 +109,7 @@ export function ResultPhase({
               <h3 className="text-xs font-mono tracking-widest text-slate-500 uppercase">
                 Opponent Board
               </h3>
-              <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-4">
+              <div className="glass-panel p-5">
                 <BattleGrid grid={opponentGrid} isOpponent={false} disabled />
               </div>
             </div>
@@ -122,7 +123,7 @@ export function ResultPhase({
                 onClick={onClaimPrize}
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
-                className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-mono font-semibold h-12 px-8 rounded-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 transition-all duration-200 tracking-wider text-sm"
+                className="btn-primary"
               >
                 CLAIM PRIZE
               </motion.button>
@@ -141,21 +142,13 @@ export function ResultPhase({
               </p>
             )}
 
-            <button
-              onClick={onVerifyBoard}
-              className="bg-transparent border border-slate-700/30 text-slate-500 hover:text-cyan-400 hover:border-cyan-500/40 font-mono h-10 px-5 rounded-lg transition-all duration-200 text-xs tracking-wider"
-            >
+            <button onClick={onVerifyBoard} className="btn-ghost">
               VERIFY BOARD
             </button>
 
-            <motion.button
-              onClick={onNewGame}
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              className="bg-transparent border border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10 font-mono font-semibold h-12 px-8 rounded-lg transition-all duration-200 tracking-wider text-sm"
-            >
+            <button onClick={onNewGame} className="btn-secondary">
               NEW GAME
-            </motion.button>
+            </button>
           </div>
         </>
       )}

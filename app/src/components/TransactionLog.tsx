@@ -18,8 +18,8 @@ const RESULT_BORDER: Record<string, string> = {
 
 export function TransactionLog({ entries }: { entries: TxEntry[] }) {
   return (
-    <div className="w-72 max-h-[480px] overflow-y-auto bg-[#0f1520]/80 backdrop-blur-md rounded-xl p-4 font-mono text-xs border border-slate-700/30">
-      <h3 className="flex items-center gap-2 text-cyan-400/80 mb-4 text-xs tracking-widest uppercase">
+    <div className="glass-panel w-72 max-h-[480px] overflow-y-auto p-4 font-mono text-xs">
+      <h3 className="flex items-center gap-2 text-cyan-400/80 mb-4 text-game-label">
         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
         ONCHAIN TX LOG
       </h3>
