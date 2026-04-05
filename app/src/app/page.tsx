@@ -58,7 +58,7 @@ export default function Home() {
 
       {/* Error banner */}
       {game.error && (
-        <div className="mx-6 mt-3 px-4 py-2.5 bg-red-950/40 border border-red-800/30 rounded-lg">
+        <div className="fixed top-16 left-6 right-6 z-[60] px-4 py-2.5 bg-red-950/90 border border-red-800/30 rounded-lg backdrop-blur-sm">
           <p className="text-red-400 font-mono text-xs">{game.error}</p>
         </div>
       )}
