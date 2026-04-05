@@ -46,6 +46,7 @@ const BOARD_SEED = Buffer.from("board");
 const PROFILE_SEED = Buffer.from("profile");
 const LEADERBOARD_SEED = Buffer.from("leaderboard");
 const IDENTITY_SEED = Buffer.from("identity");
+const SESSION_SEED = Buffer.from("session");
 
 // ── PDA derivation (battleship program) ─────────────────────────────────────
 
@@ -82,6 +83,16 @@ export function getLeaderboardPda(): [PublicKey, number] {
 
 export function getProgramIdentityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([IDENTITY_SEED], PROGRAM_ID);
+}
+
+export function getSessionAuthorityPda(
+  game: PublicKey,
+  player: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [SESSION_SEED, game.toBuffer(), player.toBuffer()],
+    PROGRAM_ID,
+  );
 }
 
 // ── PDA derivation (MagicBlock SDK) ─────────────────────────────────────────

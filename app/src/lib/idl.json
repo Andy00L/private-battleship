@@ -129,8 +129,15 @@
       "accounts": [
         {
           "name": "winner",
+          "docs": [
+            "TX signer: winner wallet OR session keypair"
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "winner_wallet",
+          "writable": true
         },
         {
           "name": "game",
@@ -208,6 +215,13 @@
               }
             ]
           }
+        },
+        {
+          "name": "session_authority",
+          "docs": [
+            "Optional session authority for session key signing"
+          ],
+          "optional": true
         }
       ],
       "args": []
@@ -835,6 +849,9 @@
       "accounts": [
         {
           "name": "attacker",
+          "docs": [
+            "TX signer: player wallet OR session keypair"
+          ],
           "writable": true,
           "signer": true
         },
@@ -870,28 +887,11 @@
           }
         },
         {
-          "name": "attacker_profile",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  102,
-                  105,
-                  108,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "attacker"
-              }
-            ]
-          }
+          "name": "session_authority",
+          "docs": [
+            "Optional session authority for session key signing"
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -1146,6 +1146,9 @@
       "accounts": [
         {
           "name": "player",
+          "docs": [
+            "TX signer: player wallet OR session keypair"
+          ],
           "writable": true,
           "signer": true
         },
@@ -1155,35 +1158,24 @@
         },
         {
           "name": "player_board",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  111,
-                  97,
-                  114,
-                  100
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "game"
-              },
-              {
-                "kind": "account",
-                "path": "player"
-              }
-            ]
-          }
+          "docs": [
+            "Board PDA validated in instruction body (derived from resolved player, not signer)"
+          ],
+          "writable": true
         },
         {
           "name": "other_player_board",
           "docs": [
-            "The other player's board (read-only, checking ships_placed for auto-transition)"
+            "The other player's board (read-only, checking ships_placed for auto-transition).",
+            "Owner constraint validated in instruction body after resolving the actual player."
           ]
+        },
+        {
+          "name": "session_authority",
+          "docs": [
+            "Optional session authority for session key signing"
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -1233,6 +1225,94 @@
           "type": {
             "vec": "bytes"
           }
+        }
+      ]
+    },
+    {
+      "name": "register_session_key",
+      "discriminator": [
+        69,
+        94,
+        60,
+        44,
+        49,
+        199,
+        183,
+        233
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "game",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  109,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game.player_a",
+                "account": "GameState"
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "GameState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "session_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "session_pubkey",
+          "type": "pubkey"
+        },
+        {
+          "name": "duration_seconds",
+          "type": "i64"
         }
       ]
     },
@@ -1299,6 +1379,109 @@
       "args": []
     },
     {
+      "name": "reset_active_games",
+      "docs": [
+        "Resets a player's active_games counter to 0.",
+        "Used to recover from stale counters after program redeploys",
+        "(old games have a different discriminator and can't be found).",
+        "Safe because active_games is a UX guard, not a fund guard."
+      ],
+      "discriminator": [
+        190,
+        245,
+        179,
+        240,
+        72,
+        19,
+        94,
+        235
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "player_profile",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  102,
+                  105,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revoke_session_key",
+      "discriminator": [
+        81,
+        192,
+        32,
+        110,
+        104,
+        116,
+        144,
+        151
+      ],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "game"
+        },
+        {
+          "name": "session_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "settle_game",
       "discriminator": [
         96,
@@ -1352,17 +1535,6 @@
           "writable": true
         },
         {
-          "name": "permission_a",
-          "writable": true
-        },
-        {
-          "name": "permission_b",
-          "writable": true
-        },
-        {
-          "name": "permission_program"
-        },
-        {
           "name": "magic_program",
           "address": "Magic11111111111111111111111111111111111111"
         },
@@ -1413,6 +1585,20 @@
         },
         {
           "name": "game"
+        },
+        {
+          "name": "profile_a",
+          "docs": [
+            "Player A profile — PDA validated in instruction body against game.player_a"
+          ],
+          "writable": true
+        },
+        {
+          "name": "profile_b",
+          "docs": [
+            "Player B profile — PDA validated in instruction body against game.player_b"
+          ],
+          "writable": true
         },
         {
           "name": "escrow_auth"
@@ -1521,6 +1707,19 @@
         130,
         181,
         80
+      ]
+    },
+    {
+      "name": "SessionAuthority",
+      "discriminator": [
+        48,
+        9,
+        30,
+        120,
+        134,
+        35,
+        172,
+        170
       ]
     }
   ],
@@ -1679,6 +1878,31 @@
       "code": 6030,
       "name": "InvalidTeeValidator",
       "msg": "TEE validator address does not match expected devnet TEE"
+    },
+    {
+      "code": 6031,
+      "name": "SessionExpired",
+      "msg": "Session key has expired"
+    },
+    {
+      "code": 6032,
+      "name": "InvalidSessionKey",
+      "msg": "Session key does not match registered session authority"
+    },
+    {
+      "code": 6033,
+      "name": "SessionGameMismatch",
+      "msg": "Session authority is for a different game"
+    },
+    {
+      "code": 6034,
+      "name": "SessionPlayerMismatch",
+      "msg": "Session authority is for a different player"
+    },
+    {
+      "code": 6035,
+      "name": "SessionDurationTooLong",
+      "msg": "Session duration exceeds maximum allowed"
     }
   ],
   "types": [
@@ -1959,6 +2183,34 @@
           },
           {
             "name": "profile_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SessionAuthority",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "game",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "session_key",
+            "type": "pubkey"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
             "type": "u8"
           }
         ]

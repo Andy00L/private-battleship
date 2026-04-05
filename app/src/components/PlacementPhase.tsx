@@ -1,7 +1,38 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { BattleGrid } from "./BattleGrid";
+
+function TimeoutCountdown({ deadline, onClaim }: { deadline: number; onClaim: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    intervalRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  const secsLeft = Math.max(0, Math.floor((deadline - now) / 1000));
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const expired = secsLeft === 0;
+
+  return (
+    <div className="mt-2 flex flex-col items-center gap-1.5">
+      <p className="text-slate-500 font-mono text-[10px]">
+        {expired ? "Opponent timed out" : `Timeout in ${m}:${s.toString().padStart(2, "0")}`}
+      </p>
+      {expired && (
+        <button
+          onClick={onClaim}
+          className="px-4 py-1.5 bg-orange-500/20 border border-orange-500/40 text-orange-400 hover:bg-orange-500/30 rounded-lg font-mono text-xs transition-all"
+        >
+          CLAIM TIMEOUT
+        </button>
+      )}
+    </div>
+  );
+}
 
 const SHIP_SIZES = [3, 2, 2, 1, 1] as const;
 const SHIP_NAMES = ["Cruiser", "Destroyer", "Destroyer", "Scout", "Scout"];
@@ -24,6 +55,11 @@ interface PlacementPhaseProps {
     }[],
   ) => void;
   confirmed: boolean;
+  setupStatus?: string;
+  setupError?: string | null;
+  onRetrySetup?: () => void;
+  timeoutDeadline?: number | null;
+  onClaimTimeout?: () => void;
 }
 
 function canPlace(
@@ -42,7 +78,7 @@ function canPlace(
   return true;
 }
 
-export function PlacementPhase({ onConfirm, confirmed }: PlacementPhaseProps) {
+export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, onRetrySetup, timeoutDeadline, onClaimTimeout }: PlacementPhaseProps) {
   const [ships, setShips] = useState<ShipToPlace[]>(
     SHIP_SIZES.map((size) => ({
       size,
@@ -111,6 +147,16 @@ export function PlacementPhase({ onConfirm, confirmed }: PlacementPhaseProps) {
 
   const allPlaced = ships.every((s) => s.placed);
 
+  // Convert placed ships to the format BattleGrid expects for multi-cell rendering
+  const placedShipPlacements = ships
+    .filter((s) => s.placed)
+    .map((s) => ({
+      startRow: s.startRow,
+      startCol: s.startCol,
+      size: s.size,
+      horizontal: s.horizontal,
+    }));
+
   const handleConfirm = () => {
     if (!allPlaced) return;
     onConfirm(
@@ -142,6 +188,7 @@ export function PlacementPhase({ onConfirm, confirmed }: PlacementPhaseProps) {
             isOpponent={false}
             onCellClick={handleCellClick}
             disabled={confirmed}
+            shipPlacements={placedShipPlacements}
           />
         </div>
 
@@ -225,11 +272,32 @@ export function PlacementPhase({ onConfirm, confirmed }: PlacementPhaseProps) {
             </p>
           )}
           {confirmed && (
-            <div className="flex items-center gap-2 justify-center py-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <p className="text-emerald-400 font-mono text-xs">
-                Deployed. Awaiting opponent...
-              </p>
+            <div className="flex flex-col items-center gap-2 justify-center py-2">
+              {setupError ? (
+                <>
+                  <p className="text-red-400 font-mono text-xs text-center">
+                    {setupError}
+                  </p>
+                  {onRetrySetup && (
+                    <button
+                      onClick={onRetrySetup}
+                      className="mt-1 px-4 py-1.5 border border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10 rounded-lg font-mono text-xs transition-all"
+                    >
+                      RETRY
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <p className="text-emerald-400 font-mono text-xs text-center">
+                    {setupStatus || "Deployed. Awaiting opponent..."}
+                  </p>
+                  {timeoutDeadline && onClaimTimeout && (
+                    <TimeoutCountdown deadline={timeoutDeadline} onClaim={onClaimTimeout} />
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>

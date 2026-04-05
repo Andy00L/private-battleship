@@ -5,6 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
 import { useGame } from "@/hooks/useGame";
 import { GameLobby } from "@/components/GameLobby";
+import { HeroVideo } from "@/components/HeroVideo";
 import { PlacementPhase } from "@/components/PlacementPhase";
 import { BattlePhase } from "@/components/BattlePhase";
 import { ResultPhase } from "@/components/ResultPhase";
@@ -47,20 +48,37 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Error banner */}
+      {game.error && (
+        <div className="mx-6 mt-3 px-4 py-2.5 bg-red-950/40 border border-red-800/30 rounded-lg">
+          <p className="text-red-400 font-mono text-xs">{game.error}</p>
+        </div>
+      )}
+
       {/* Main content */}
       <main className="flex-1">
         {game.phase === "lobby" && (
-          <GameLobby
-            walletConnected={!!publicKey}
-            onCreateGame={game.createGame}
-            onJoinGame={game.joinGame}
-          />
+          <div className="relative overflow-hidden">
+            <HeroVideo />
+            <div className="relative z-10">
+              <GameLobby
+                walletConnected={!!publicKey}
+                onCreateGame={game.createGame}
+                onJoinGame={game.joinGame}
+              />
+            </div>
+          </div>
         )}
 
         {game.phase === "placing" && (
           <PlacementPhase
             onConfirm={game.placeShips}
             confirmed={game.shipsPlaced}
+            setupStatus={game.setupStatus}
+            setupError={game.setupError}
+            onRetrySetup={game.retrySetup}
+            timeoutDeadline={game.timeoutDeadline}
+            onClaimTimeout={game.claimTimeout}
           />
         )}
 
@@ -74,7 +92,11 @@ export default function Home() {
             lastHit={game.lastHit}
             txLog={game.txLog}
             onFire={game.fire}
-            disabled={false}
+            disabled={!game.isMyTurn}
+            timeoutDeadline={game.timeoutDeadline}
+            onClaimTimeout={game.claimTimeout}
+            myShipPlacements={game.myShipPlacements}
+            recentShots={game.recentShots}
           />
         )}
 
@@ -92,7 +114,10 @@ export default function Home() {
             solPriceUsd={0}
             onClaimPrize={game.claimPrize}
             onVerifyBoard={game.verifyBoard}
+            onNewGame={game.newGame}
             prizeClaimed={game.prizeClaimed}
+            myShipPlacements={game.myShipPlacements}
+            endGameStatus={game.endGameStatus}
           />
         )}
       </main>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, DM_Sans } from "next/font/google";
 import { SolanaProviders } from "@/components/wallet-provider";
+import { DebugLogButton } from "@/components/DebugLogButton";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -34,7 +35,10 @@ export default function RootLayout({
         className="min-h-full flex flex-col font-sans antialiased"
         style={{ backgroundColor: "#070a0f", color: "#e2e8f0" }}
       >
-        <SolanaProviders>{children}</SolanaProviders>
+        <SolanaProviders>
+          {children}
+          <DebugLogButton />
+        </SolanaProviders>
       </body>
     </html>
   );

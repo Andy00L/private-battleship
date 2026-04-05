@@ -16,6 +16,7 @@ graph LR
         VERIFY[verify_board]
         PROFILE[initialize_profile]
         LEADER[initialize_leaderboard]
+        SESSION[register_session_key / revoke_session_key]
     end
 
     subgraph "TEE (MagicBlock Ephemeral Rollups)"
@@ -29,7 +30,8 @@ graph LR
         VRF_RESP[VRF randomness callback]
     end
 
-    CREATE --> DELEGATE
+    CREATE --> SESSION
+    SESSION --> DELEGATE
     DELEGATE --> PLACE
     VRF_REQ --> VRF_RESP --> VRF_CB
     PLACE --> FIRE
@@ -50,12 +52,13 @@ solana-blitz-v3/
     battleship/
       Cargo.toml                         # anchor-lang 0.32.1, ephemeral SDKs
       src/
-        lib.rs                           # All 16 instructions, 4 accounts, 28 errors (1522 lines)
+        lib.rs                           # 18 instructions + 1 auto-generated, 5 accounts, 36 errors (1715 lines)
   app/
     package.json                         # Next.js 16.2.2, React 19.2.4
     next.config.ts                       # Minimal (no custom config)
     tsconfig.json                        # Strict, ES2017, bundler resolution, @/* alias
     postcss.config.mjs                   # @tailwindcss/postcss v4
+    .env.local                           # NEXT_PUBLIC_DEBUG_LOG=true
     src/
       app/
         layout.tsx                       # Root layout, fonts (DM Sans, IBM Plex Mono)
@@ -68,17 +71,21 @@ solana-blitz-v3/
         PlacementPhase.tsx               # Ship placement with rotation (R key)
         ResultPhase.tsx                  # Winner banner, claim prize, verify board
         TransactionLog.tsx               # Color-coded TX entries with latency
+        HeroVideo.tsx                    # Full-screen looping video background
+        DebugLogButton.tsx               # Floating debug log download (env-gated)
         wallet-provider.tsx              # Phantom adapter, Solana devnet
       hooks/
-        useGame.ts                       # Game lifecycle + orchestration (1127 lines)
+        useGame.ts                       # Game lifecycle + orchestration (1563 lines)
       lib/
         program.ts                       # PDA derivation, addresses, Anchor program factory
         idl.json                         # Anchor IDL (generated from anchor build)
         tee-connection.ts                # TEE auth, 240s token refresh
         board-hash.ts                    # SHA-256 commit-reveal hash
         oracle.ts                        # SOL/USD price display (stubbed)
+        debug-logger.ts                  # Categorized debug logging with download
     public/
-      assets/                            # SVG icons (hit, miss, ship-1, ship-2, ship-3)
+      assets/                            # SVG icons (crosshair, hit, miss, ship-1, ship-2, ship-3)
+      hero-bg.mp4                        # Background video for landing
 ```
 
 ## Game Lifecycle
@@ -107,6 +114,7 @@ sequenceDiagram
     A->>VRF: request_turn_order(seed_a XOR seed_b)
     VRF-->>TEE: callback_turn_order(randomness)
     A->>L1: delegate_game_state (public ACL, requires boards_delegated == 2)
+    A->>L1: register_session_key (optional, enables popup-free signing)
 
     Note over A,B: Phase 3: Battle (TEE, private execution)
     A->>TEE: place_ships([3,2,2,1,1])
@@ -114,9 +122,9 @@ sequenceDiagram
     Note over TEE: Both placed: auto-transition to Playing
 
     loop Until all ships sunk
-        A->>TEE: fire(row, col)
+        A->>TEE: fire(row, col) [session key or wallet]
         TEE-->>TEE: Read opponent board (private), write hit/miss (public)
-        B->>TEE: fire(row, col)
+        B->>TEE: fire(row, col) [session key or wallet]
         TEE-->>TEE: Read opponent board (private), write hit/miss (public)
     end
 
@@ -139,6 +147,7 @@ erDiagram
     GameState }o--|| PlayerProfile : "player_a"
     GameState }o--|| PlayerProfile : "player_b"
     GameState }o--o| Leaderboard : "updated on settle"
+    GameState ||--o{ SessionAuthority : "up to 2"
 
     GameState {
         u64 game_id
@@ -192,9 +201,17 @@ erDiagram
         i64 last_updated
         u8 leaderboard_bump
     }
+
+    SessionAuthority {
+        Pubkey game
+        Pubkey player
+        Pubkey session_key
+        i64 expires_at
+        u8 bump
+    }
 ```
 
-**Account sizes** (bytes): GameState 446, PlayerBoard 136, PlayerProfile 58, Leaderboard 455. All use fixed arrays. No `Vec` anywhere, which makes sizes predictable and avoids realloc in the TEE.
+**Account sizes** (bytes): GameState 446, PlayerBoard 136, PlayerProfile 58, Leaderboard 455, SessionAuthority 113. All use fixed arrays. No `Vec` anywhere, which makes sizes predictable and avoids realloc in the TEE.
 
 ## Privacy Architecture
 
@@ -274,7 +291,8 @@ The core game loop. It validates 6 conditions, determines hit/miss, tracks ship 
 
 ```mermaid
 flowchart TD
-    START[fire called] --> V1{status == Playing?}
+    START[fire called] --> RESOLVE{session key or<br/>direct signer?}
+    RESOLVE --> V1{status == Playing?}
     V1 -->|No| ERR1[GameNotActive 6010]
     V1 -->|Yes| V2{attacker is player?}
     V2 -->|No| ERR2[NotAPlayer 6013]
@@ -301,6 +319,43 @@ flowchart TD
     FINISH --> STATS
 ```
 
+## Session Key Flow
+
+Session keys let players sign TEE transactions (fire, place_ships) without wallet popups. The frontend generates a throwaway keypair, registers it on-chain, then uses it for signing.
+
+```mermaid
+sequenceDiagram
+    participant User as Player Wallet
+    participant Hook as useGame Hook
+    participant L1 as Solana L1
+    participant TEE as MagicBlock TEE
+
+    Hook->>Hook: Generate session keypair
+    Hook->>L1: register_session_key(session_pubkey, duration)
+    L1-->>L1: Create SessionAuthority PDA
+    Note over L1: Seeds: ["session", game, player]
+
+    Hook->>TEE: place_ships (signed by session key)
+    TEE->>TEE: resolve_player: validate session<br/>check expiry, game, player match
+    TEE-->>TEE: Use player wallet as the actor
+
+    loop Battle turns
+        Hook->>TEE: fire(row, col) signed by session key
+        TEE->>TEE: resolve_player validates session
+    end
+
+    Note over Hook: Game ends or session expires
+    Hook->>L1: revoke_session_key (closes account)
+```
+
+The `resolve_player` helper function validates session keys on every use. It checks:
+1. Session not expired (`expires_at > clock.unix_timestamp`)
+2. Session game matches the current game
+3. Session player matches the registered player
+4. Session key matches the signer
+
+If any check fails, the corresponding error (6031-6034) is returned. Max session duration is 3600 seconds (1 hour).
+
 ## Frontend Orchestration
 
 The `useGame` hook in the frontend automatically handles the multi-step setup process. After a player creates or joins a game, the orchestration engine watches the game state and executes the next required step.
@@ -315,33 +370,44 @@ sequenceDiagram
     User->>Hook: placeShips(placements)
     Hook->>Hook: Generate board hash + salt
     Hook->>Hook: Store salt in sessionStorage
+
+    Note over Hook: Step 0: Profile + balance checks
+    Hook->>L1: ensureProfile (initialize_profile if needed)
+    Hook->>L1: assertSufficientBalance (for creator)
+
     Hook->>L1: create_game / join_game TX
 
     Note over Hook: Orchestration begins (automatic)
 
-    Hook->>Hook: Initialize TeeConnectionManager
     Hook->>L1: Subscribe to GameState
+    Note over Hook: Poll until status == Placing
 
     Hook->>L1: delegate_board (my board)
-    Note over Hook: Watch for boards_delegated == 2
+    Note over Hook: Poll until boards_delegated >= 2
 
     Hook->>L1: request_turn_order (VRF)
-    Note over Hook: Watch for current_turn to be set
+    Note over Hook: Poll until current_turn set
 
     Hook->>L1: delegate_game_state
+
     Note over Hook: Switch subscription from L1 to TEE
 
-    Hook->>TEE: place_ships on TEE
+    Hook->>TEE: Initialize TeeConnectionManager
+    Hook->>L1: register_session_key (generate keypair)
+
+    Hook->>TEE: place_ships on TEE (via session key)
     Note over Hook: Orchestration complete, phase = playing
 
     User->>Hook: fire(row, col)
-    Hook->>TEE: fire TX
+    Hook->>TEE: fire TX (via session key)
 
     Note over Hook: Watch for status == Finished
     Hook->>TEE: settle_game (auto-triggered)
 ```
 
-The orchestration uses refs (not React state) to track which steps have been completed. Each step includes retry logic for transient network errors. If a step fails permanently, it stops and logs the error.
+The orchestration uses refs (not React state) to track which steps have been completed. Each step includes retry logic for transient network errors. If a step fails permanently, it stops and logs the error. The `retrySetup()` function re-runs from the last failed step.
+
+Auto-settlement: when the hook detects `status === Finished`, it automatically calls `settle_game` to commit results and reveal boards.
 
 ## Timeout Logic
 
@@ -447,5 +513,7 @@ The program makes 13 cross-program invocations across its instructions.
 **Orchestration via refs, not state.** The `useGame` hook tracks delegation/VRF/placement progress with React refs rather than state. This avoids re-render cascades during the multi-step setup and prevents stale closure bugs in the subscription callbacks. The tradeoff: the orchestration state isn't visible in React DevTools.
 
 **Session persistence for commit-reveal.** Salt and placements are stored in `sessionStorage` keyed by game PDA. This ensures `verify_board` works even after a page refresh mid-game. The data is cleaned up after successful verification. The tradeoff: `sessionStorage` is per-tab, so opening the same game in two tabs would not share the salt.
+
+**Session keys for UX.** Without session keys, every `fire` call would trigger a wallet popup. The `register_session_key` instruction creates a PDA that authorizes a throwaway keypair to act on behalf of the player for a specific game. The `resolve_player` function validates the session on every call. The tradeoff: the session keypair lives in memory and is lost on page refresh, but a new one can be registered cheaply.
 
 [Back to README](README.md)

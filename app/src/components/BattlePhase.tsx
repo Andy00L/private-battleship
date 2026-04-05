@@ -1,7 +1,15 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import { BattleGrid } from "./BattleGrid";
 import { TransactionLog, type TxEntry } from "./TransactionLog";
+
+interface ShipPlacement {
+  startRow: number;
+  startCol: number;
+  size: number;
+  horizontal: boolean;
+}
 
 interface BattlePhaseProps {
   myGrid: number[];
@@ -13,6 +21,10 @@ interface BattlePhaseProps {
   txLog: TxEntry[];
   onFire: (row: number, col: number) => void;
   disabled: boolean;
+  timeoutDeadline?: number | null;
+  onClaimTimeout?: () => void;
+  myShipPlacements?: ShipPlacement[] | null;
+  recentShots?: { row: number; col: number; result: "hit" | "miss" | "sunk"; timestamp: number }[];
 }
 
 function ShipDots({ count, max }: { count: number; max: number }) {
@@ -30,6 +42,38 @@ function ShipDots({ count, max }: { count: number; max: number }) {
   );
 }
 
+function TimeoutBar({ deadline, onClaim }: { deadline: number; onClaim: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    intervalRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  const secsLeft = Math.max(0, Math.floor((deadline - now) / 1000));
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  const expired = secsLeft === 0;
+
+  if (!expired) {
+    return (
+      <p className="text-slate-600 font-mono text-[10px] text-center">
+        Timeout in {m}:{s.toString().padStart(2, "0")}
+      </p>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClaim}
+      className="px-4 py-1.5 bg-orange-500/20 border border-orange-500/40 text-orange-400 hover:bg-orange-500/30 rounded-lg font-mono text-xs transition-all"
+    >
+      CLAIM TIMEOUT
+    </button>
+  );
+}
+
 export function BattlePhase({
   myGrid,
   opponentHits,
@@ -40,6 +84,10 @@ export function BattlePhase({
   txLog,
   onFire,
   disabled,
+  timeoutDeadline,
+  onClaimTimeout,
+  myShipPlacements,
+  recentShots,
 }: BattlePhaseProps) {
   return (
     <div className="flex gap-6 px-6 py-8 items-start justify-center flex-wrap xl:flex-nowrap">
@@ -49,7 +97,7 @@ export function BattlePhase({
           Your Fleet
         </h3>
         <div className="bg-[#0f1520]/80 backdrop-blur-md border border-slate-700/30 rounded-xl p-4">
-          <BattleGrid grid={myGrid} isOpponent={false} disabled />
+          <BattleGrid grid={myGrid} isOpponent={false} disabled shipPlacements={myShipPlacements} />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-mono text-slate-600 uppercase">
@@ -74,6 +122,11 @@ export function BattlePhase({
         <div className="text-[10px] font-mono text-slate-700 tracking-widest">
           VS
         </div>
+        {timeoutDeadline && onClaimTimeout && (
+          <div className="mt-4">
+            <TimeoutBar deadline={timeoutDeadline} onClaim={onClaimTimeout} />
+          </div>
+        )}
       </div>
 
       {/* Right: Enemy waters */}
@@ -88,6 +141,7 @@ export function BattlePhase({
             onCellClick={onFire}
             disabled={disabled || !isMyTurn}
             lastHit={lastHit}
+            recentShots={recentShots}
           />
         </div>
         <div className="flex items-center gap-2">

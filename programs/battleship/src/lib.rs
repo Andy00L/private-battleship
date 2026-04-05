@@ -1,8 +1,7 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{action, commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::access_control::instructions::{
-    CommitAndUndelegatePermissionCpiBuilder, CreatePermissionCpiBuilder,
-    UpdatePermissionCpiBuilder,
+    CreatePermissionCpiBuilder,
 };
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::access_control::structs::{
@@ -33,6 +32,7 @@ pub const GAME_SEED: &[u8] = b"game";
 pub const BOARD_SEED: &[u8] = b"board";
 pub const PROFILE_SEED: &[u8] = b"profile";
 pub const LEADERBOARD_SEED: &[u8] = b"leaderboard";
+pub const SESSION_SEED: &[u8] = b"session";
 
 // ── Game constants ─────────────────────────────────────────────────────────────
 
@@ -41,6 +41,7 @@ pub const MIN_BUY_IN: u64 = 1_000_000; // 0.001 SOL
 pub const MAX_BUY_IN: u64 = 100_000_000_000; // 100 SOL
 pub const MAX_ACTIVE_GAMES: u8 = 3;
 pub const MAX_LEADERBOARD_ENTRIES: usize = 10;
+pub const MAX_SESSION_DURATION: i64 = 3600; // 1 hour
 
 // ── Account sizes ──────────────────────────────────────────────────────────────
 // Each includes the 8-byte discriminator.
@@ -59,6 +60,9 @@ pub const PLAYER_PROFILE_SIZE: usize = 58;
 // 8 + 8 + (10 * 43) + 8 + 1 = 455
 pub const LEADERBOARD_SIZE: usize = 455;
 
+// 8 + 32 + 32 + 32 + 8 + 1 = 113
+pub const SESSION_AUTHORITY_SIZE: usize = 113;
+
 // ── Enums ──────────────────────────────────────────────────────────────────────
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +75,7 @@ pub enum GameStatus {
     TimedOut,         // One player timed out
 }
 
-// ── Error codes (6000–6026) ────────────────────────────────────────────────────
+// ── Error codes (6000–6035) ────────────────────────────────────────────────────
 
 #[error_code]
 pub enum BattleshipError {
@@ -137,6 +141,16 @@ pub enum BattleshipError {
     InvalidGamePda, // 6029
     #[msg("TEE validator address does not match expected devnet TEE")]
     InvalidTeeValidator, // 6030
+    #[msg("Session key has expired")]
+    SessionExpired, // 6031
+    #[msg("Session key does not match registered session authority")]
+    InvalidSessionKey, // 6032
+    #[msg("Session authority is for a different game")]
+    SessionGameMismatch, // 6033
+    #[msg("Session authority is for a different player")]
+    SessionPlayerMismatch, // 6034
+    #[msg("Session duration exceeds maximum allowed")]
+    SessionDurationTooLong, // 6035
 }
 
 // ── Structs ────────────────────────────────────────────────────────────────────
@@ -224,6 +238,15 @@ pub struct Leaderboard {
     pub entries: [LeaderboardEntry; 10],
     pub last_updated: i64,
     pub leaderboard_bump: u8,
+}
+
+#[account]
+pub struct SessionAuthority {
+    pub game: Pubkey,
+    pub player: Pubkey,
+    pub session_key: Pubkey,
+    pub expires_at: i64,
+    pub bump: u8,
 }
 
 // ── Program ────────────────────────────────────────────────────────────────────
@@ -687,12 +710,53 @@ pub mod battleship {
         Ok(())
     }
 
+    // ── Session key management ──────────────────────────────────────────────
+
+    pub fn register_session_key(
+        ctx: Context<RegisterSessionKey>,
+        session_pubkey: Pubkey,
+        duration_seconds: i64,
+    ) -> Result<()> {
+        let game = &ctx.accounts.game;
+        let player = ctx.accounts.player.key();
+
+        require!(
+            player == game.player_a || player == game.player_b,
+            BattleshipError::NotAPlayer,
+        );
+        require!(
+            duration_seconds > 0 && duration_seconds <= MAX_SESSION_DURATION,
+            BattleshipError::SessionDurationTooLong,
+        );
+
+        let session = &mut ctx.accounts.session_authority;
+        session.game = game.key();
+        session.player = player;
+        session.session_key = session_pubkey;
+        session.expires_at = Clock::get()?.unix_timestamp + duration_seconds;
+        session.bump = ctx.bumps.session_authority;
+
+        Ok(())
+    }
+
+    pub fn revoke_session_key(_ctx: Context<RevokeSessionKey>) -> Result<()> {
+        // Account closed via `close = player` constraint. Nothing else needed.
+        Ok(())
+    }
+
     // ── 9. place_ships (TEE) ───────────────────────────────────────────────
 
     pub fn place_ships(ctx: Context<PlaceShips>, placements: Vec<ShipPlacement>) -> Result<()> {
+        // Capture keys before mutable borrows
+        let board_key = ctx.accounts.player_board.key();
+        let game_key = ctx.accounts.game.key();
+        let signer_key = ctx.accounts.player.key();
+
+        // Resolve actual player from signer or session key
+        let player = resolve_player(signer_key, &ctx.accounts.session_authority, game_key)?;
+
         let game = &mut ctx.accounts.game;
         let board = &mut ctx.accounts.player_board;
-        let player = ctx.accounts.player.key();
 
         // Guard 1: correct phase
         require!(
@@ -700,15 +764,28 @@ pub mod battleship {
             BattleshipError::WrongPhase
         );
 
-        // Guard 2: board belongs to caller
+        // Guard 2: board belongs to resolved player
         require!(board.owner == player, BattleshipError::NotYourBoard);
+
+        // Validate board PDA matches resolved player
+        let (expected_board, _) = Pubkey::find_program_address(
+            &[BOARD_SEED, game_key.as_ref(), player.as_ref()],
+            &crate::ID,
+        );
+        require!(board_key == expected_board, BattleshipError::NotYourBoard);
 
         // Guard 3: not already placed
         require!(!board.ships_placed, BattleshipError::AlreadyPlaced);
 
-        // Guard 4: caller is a player in this game
+        // Guard 4: resolved player is a player in this game
         require!(
             player == game.player_a || player == game.player_b,
+            BattleshipError::NotAPlayer,
+        );
+
+        // Guard 5: other_player_board belongs to the OTHER player
+        require!(
+            ctx.accounts.other_player_board.owner != player,
             BattleshipError::NotAPlayer,
         );
 
@@ -775,7 +852,10 @@ pub mod battleship {
     pub fn fire(ctx: Context<Fire>, row: u8, col: u8) -> Result<()> {
         let game = &mut ctx.accounts.game;
         let target_board = &mut ctx.accounts.target_board;
-        let attacker = ctx.accounts.attacker.key();
+        let signer_key = ctx.accounts.attacker.key();
+
+        // Resolve actual player from signer or session key
+        let attacker = resolve_player(signer_key, &ctx.accounts.session_authority, game.key())?;
 
         // Validate game is active
         require!(
@@ -783,13 +863,13 @@ pub mod battleship {
             BattleshipError::GameNotActive
         );
 
-        // Validate attacker is a player
+        // Validate resolved attacker is a player
         require!(
             attacker == game.player_a || attacker == game.player_b,
             BattleshipError::NotAPlayer,
         );
 
-        // Validate it's attacker's turn
+        // Validate it's the resolved attacker's turn
         require!(
             game.current_turn == attacker,
             BattleshipError::NotYourTurn
@@ -875,13 +955,9 @@ pub mod battleship {
         game.turn_count += 1;
         game.last_action_ts = Clock::get()?.unix_timestamp;
 
-        // Update attacker profile stats
-        let profile = &mut ctx.accounts.attacker_profile;
-        profile.total_shots_fired += 1;
-        if target_board.grid[idx] == 2 {
-            // Was just set to 2 on hit
-            profile.total_hits += 1;
-        }
+        // NOTE: Per-shot stats (total_shots_fired, total_hits) are computed at settlement
+        // in update_leaderboard (base layer Magic Action). Profile cannot be written
+        // here because PlayerProfile is not delegated to the TEE.
 
         Ok(())
     }
@@ -924,6 +1000,49 @@ pub mod battleship {
             }
         }
 
+        // ── Per-shot stats (moved from fire(), which runs on TEE and can't write profiles) ──
+
+        // Count shots and hits from the public hit boards
+        let mut shots_a: u32 = 0;
+        let mut hits_a: u32 = 0;
+        let mut shots_b: u32 = 0;
+        let mut hits_b: u32 = 0;
+
+        for i in 0..36 {
+            // board_b_hits: Player A's attacks on Player B
+            if game.board_b_hits[i] != 0 {
+                shots_a += 1;
+            }
+            if game.board_b_hits[i] == 2 {
+                hits_a += 1;
+            }
+            // board_a_hits: Player B's attacks on Player A
+            if game.board_a_hits[i] != 0 {
+                shots_b += 1;
+            }
+            if game.board_a_hits[i] == 2 {
+                hits_b += 1;
+            }
+        }
+
+        // Update Player A profile
+        let profile_a = &mut ctx.accounts.profile_a;
+        require!(
+            profile_a.player == game.player_a,
+            BattleshipError::NotAPlayer,
+        );
+        profile_a.total_shots_fired = profile_a.total_shots_fired.saturating_add(shots_a);
+        profile_a.total_hits = profile_a.total_hits.saturating_add(hits_a);
+
+        // Update Player B profile
+        let profile_b = &mut ctx.accounts.profile_b;
+        require!(
+            profile_b.player == game.player_b,
+            BattleshipError::NotAPlayer,
+        );
+        profile_b.total_shots_fired = profile_b.total_shots_fired.saturating_add(shots_b);
+        profile_b.total_hits = profile_b.total_hits.saturating_add(hits_b);
+
         Ok(())
     }
 
@@ -944,7 +1063,18 @@ pub mod battleship {
             BattleshipError::NotAPlayer,
         );
 
-        // Build Magic Action: update leaderboard on base layer
+        // Derive profile PDAs for the Magic Action
+        let (profile_a_pda, _) = Pubkey::find_program_address(
+            &[PROFILE_SEED, game.player_a.as_ref()],
+            &crate::ID,
+        );
+        let (profile_b_pda, _) = Pubkey::find_program_address(
+            &[PROFILE_SEED, game.player_b.as_ref()],
+            &crate::ID,
+        );
+
+        // Build Magic Action: update leaderboard + player stats on base layer
+        // Account order MUST match UpdateLeaderboard struct: leaderboard, game, profile_a, profile_b
         let instruction_data =
             anchor_lang::InstructionData::data(&crate::instruction::UpdateLeaderboard {});
         let action = CallHandler {
@@ -958,58 +1088,41 @@ pub mod battleship {
                     pubkey: ctx.accounts.game.key(),
                     is_writable: false,
                 },
+                ShortAccountMeta {
+                    pubkey: profile_a_pda,
+                    is_writable: true,
+                },
+                ShortAccountMeta {
+                    pubkey: profile_b_pda,
+                    is_writable: true,
+                },
             ],
             args: ActionArgs::new(instruction_data),
             escrow_authority: ctx.accounts.payer.to_account_info(),
-            compute_units: 200_000,
+            compute_units: 300_000,
         };
 
-        // Commit GameState + trigger leaderboard update + undelegate
+        // Commit GameState + both boards + trigger leaderboard update + undelegate all
+        // NOTE: Board ACL changes (private → public) are removed. Once committed back to
+        // the base layer, account data is publicly readable by default. The private ACL
+        // only controlled access within the TEE context.
         let magic_action = MagicInstructionBuilder {
             payer: ctx.accounts.payer.to_account_info(),
             magic_context: ctx.accounts.magic_context.to_account_info(),
             magic_program: ctx.accounts.magic_program.to_account_info(),
             magic_action: MagicAction::CommitAndUndelegate(CommitAndUndelegate {
                 commit_type: CommitType::WithHandler {
-                    commited_accounts: vec![ctx.accounts.game.to_account_info()],
+                    commited_accounts: vec![
+                        ctx.accounts.game.to_account_info(),
+                        ctx.accounts.board_a.to_account_info(),
+                        ctx.accounts.board_b.to_account_info(),
+                    ],
                     call_handlers: vec![action],
                 },
                 undelegate_type: UndelegateType::Standalone,
             }),
         };
         magic_action.build_and_invoke()?;
-
-        // Make both boards public for post-game reveal
-        UpdatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .authority(&ctx.accounts.payer, true)
-            .permissioned_account(&ctx.accounts.board_a, false)
-            .permission(&ctx.accounts.permission_a)
-            .args(MembersArgs { members: None })
-            .invoke()?;
-
-        UpdatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .authority(&ctx.accounts.payer, true)
-            .permissioned_account(&ctx.accounts.board_b, false)
-            .permission(&ctx.accounts.permission_b)
-            .args(MembersArgs { members: None })
-            .invoke()?;
-
-        // Commit and undelegate both boards
-        CommitAndUndelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .authority(&ctx.accounts.payer, true)
-            .permissioned_account(&ctx.accounts.board_a, false)
-            .permission(&ctx.accounts.permission_a)
-            .magic_program(&ctx.accounts.magic_program)
-            .magic_context(&ctx.accounts.magic_context)
-            .invoke()?;
-
-        CommitAndUndelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program)
-            .authority(&ctx.accounts.payer, true)
-            .permissioned_account(&ctx.accounts.board_b, false)
-            .permission(&ctx.accounts.permission_b)
-            .magic_program(&ctx.accounts.magic_program)
-            .magic_context(&ctx.accounts.magic_context)
-            .invoke()?;
 
         Ok(())
     }
@@ -1018,6 +1131,14 @@ pub mod battleship {
 
     pub fn claim_prize(ctx: Context<ClaimPrize>) -> Result<()> {
         let game = &mut ctx.accounts.game;
+        let signer_key = ctx.accounts.winner.key();
+
+        // Resolve actual player wallet from signer or session key
+        let actual_winner = resolve_player(
+            signer_key,
+            &ctx.accounts.session_authority,
+            game.key(),
+        )?;
 
         require!(
             game.status == GameStatus::Finished as u8
@@ -1025,17 +1146,20 @@ pub mod battleship {
             BattleshipError::GameNotFinished
         );
         require!(game.has_winner, BattleshipError::GameNotFinished);
+        require!(actual_winner == game.winner, BattleshipError::NotWinner);
+
+        // Validate winner_wallet matches the resolved player (SOL destination)
         require!(
-            game.winner == ctx.accounts.winner.key(),
-            BattleshipError::NotWinner
+            ctx.accounts.winner_wallet.key() == actual_winner,
+            BattleshipError::NotWinner,
         );
 
-        // Transfer entire pot to winner (set to 0 to prevent double-claim)
+        // Transfer entire pot to winner WALLET (set to 0 to prevent double-claim)
         let pot = game.pot_lamports;
         require!(pot > 0, BattleshipError::GameNotFinished);
         game.pot_lamports = 0;
         **game.to_account_info().try_borrow_mut_lamports()? -= pot;
-        **ctx.accounts.winner.try_borrow_mut_lamports()? += pot;
+        **ctx.accounts.winner_wallet.try_borrow_mut_lamports()? += pot;
 
         // Decrement active games for both players
         let profile_a = &mut ctx.accounts.profile_a;
@@ -1047,7 +1171,7 @@ pub mod battleship {
         profile_b.total_games += 1;
 
         // Increment winner stats
-        if game.winner == game.player_a {
+        if actual_winner == game.player_a {
             profile_a.total_wins += 1;
         } else {
             profile_b.total_wins += 1;
@@ -1192,6 +1316,25 @@ pub mod battleship {
 
         Ok(())
     }
+
+    // ── 15. reset_active_games ────────────────────────────────────────────
+
+    /// Resets a player's active_games counter to 0.
+    /// Used to recover from stale counters after program redeploys
+    /// (old games have a different discriminator and can't be found).
+    /// Safe because active_games is a UX guard, not a fund guard.
+    pub fn reset_active_games(ctx: Context<ResetActiveGames>) -> Result<()> {
+        let profile = &mut ctx.accounts.player_profile;
+        if profile.active_games > 0 {
+            msg!(
+                "Resetting active_games from {} to 0 for player {}",
+                profile.active_games,
+                ctx.accounts.player.key()
+            );
+            profile.active_games = 0;
+        }
+        Ok(())
+    }
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
@@ -1199,9 +1342,9 @@ pub mod battleship {
 fn ship_occupies(ship: &Ship, row: u8, col: u8) -> bool {
     for i in 0..ship.size {
         let (sr, sc) = if ship.horizontal == 1 {
-            (ship.start_row, ship.start_col + i)
+            (ship.start_row, ship.start_col.saturating_add(i))
         } else {
-            (ship.start_row + i, ship.start_col)
+            (ship.start_row.saturating_add(i), ship.start_col)
         };
         if sr == row && sc == col {
             return true;
@@ -1405,30 +1548,31 @@ pub struct CallbackTurnOrderCtx<'info> {
 
 #[derive(Accounts)]
 pub struct PlaceShips<'info> {
+    /// TX signer: player wallet OR session keypair
     #[account(mut)]
     pub player: Signer<'info>,
 
     #[account(mut)]
     pub game: Account<'info, GameState>,
 
-    #[account(
-        mut,
-        seeds = [BOARD_SEED, game.key().as_ref(), player.key().as_ref()],
-        bump = player_board.board_bump,
-        constraint = player_board.owner == player.key() @ BattleshipError::NotYourBoard,
-    )]
+    /// Board PDA validated in instruction body (derived from resolved player, not signer)
+    #[account(mut)]
     pub player_board: Account<'info, PlayerBoard>,
 
-    /// The other player's board (read-only, checking ships_placed for auto-transition)
+    /// The other player's board (read-only, checking ships_placed for auto-transition).
+    /// Owner constraint validated in instruction body after resolving the actual player.
     #[account(
         constraint = other_player_board.game == game.key() @ BattleshipError::WrongPhase,
-        constraint = other_player_board.owner != player.key() @ BattleshipError::NotAPlayer,
     )]
     pub other_player_board: Account<'info, PlayerBoard>,
+
+    /// Optional session authority for session key signing
+    pub session_authority: Option<Account<'info, SessionAuthority>>,
 }
 
 #[derive(Accounts)]
 pub struct Fire<'info> {
+    /// TX signer: player wallet OR session keypair
     #[account(mut)]
     pub attacker: Signer<'info>,
 
@@ -1442,12 +1586,8 @@ pub struct Fire<'info> {
     )]
     pub target_board: Account<'info, PlayerBoard>,
 
-    #[account(
-        mut,
-        seeds = [PROFILE_SEED, attacker.key().as_ref()],
-        bump = attacker_profile.profile_bump,
-    )]
-    pub attacker_profile: Account<'info, PlayerProfile>,
+    /// Optional session authority for session key signing
+    pub session_authority: Option<Account<'info, SessionAuthority>>,
 }
 
 #[action]
@@ -1457,6 +1597,12 @@ pub struct UpdateLeaderboard<'info> {
     pub leaderboard: Account<'info, Leaderboard>,
     /// CHECK: GameState (may be owned by Delegation Program at this point)
     pub game: UncheckedAccount<'info>,
+    /// Player A profile — PDA validated in instruction body against game.player_a
+    #[account(mut)]
+    pub profile_a: Account<'info, PlayerProfile>,
+    /// Player B profile — PDA validated in instruction body against game.player_b
+    #[account(mut)]
+    pub profile_b: Account<'info, PlayerProfile>,
 }
 
 #[commit]
@@ -1469,26 +1615,23 @@ pub struct SettleGame<'info> {
     /// CHECK: Leaderboard PDA
     #[account(seeds = [LEADERBOARD_SEED], bump)]
     pub leaderboard: UncheckedAccount<'info>,
-    /// CHECK: Board A account
+    /// CHECK: Board A account (delegated to TEE)
     #[account(mut)]
     pub board_a: AccountInfo<'info>,
-    /// CHECK: Board B account
+    /// CHECK: Board B account (delegated to TEE)
     #[account(mut)]
     pub board_b: AccountInfo<'info>,
-    /// CHECK: Permission PDA for board A
-    #[account(mut)]
-    pub permission_a: AccountInfo<'info>,
-    /// CHECK: Permission PDA for board B
-    #[account(mut)]
-    pub permission_b: AccountInfo<'info>,
-    /// CHECK: Permission Program
-    pub permission_program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
 pub struct ClaimPrize<'info> {
+    /// TX signer: winner wallet OR session keypair
     #[account(mut)]
     pub winner: Signer<'info>,
+
+    /// CHECK: The actual winner's wallet (receives SOL). Validated in instruction body.
+    #[account(mut)]
+    pub winner_wallet: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -1510,6 +1653,9 @@ pub struct ClaimPrize<'info> {
         bump = profile_b.profile_bump,
     )]
     pub profile_b: Account<'info, PlayerProfile>,
+
+    /// Optional session authority for session key signing
+    pub session_authority: Option<Account<'info, SessionAuthority>>,
 }
 
 #[derive(Accounts)]
@@ -1554,4 +1700,84 @@ pub struct VerifyBoard<'info> {
     pub game: Account<'info, GameState>,
     /// CHECK: the player whose board is being verified
     pub board_owner: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RegisterSessionKey<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        seeds = [GAME_SEED, game.player_a.as_ref(), &game.game_id.to_le_bytes()],
+        bump = game.game_bump,
+    )]
+    pub game: Account<'info, GameState>,
+
+    #[account(
+        init_if_needed,
+        payer = player,
+        space = SESSION_AUTHORITY_SIZE,
+        seeds = [SESSION_SEED, game.key().as_ref(), player.key().as_ref()],
+        bump,
+    )]
+    pub session_authority: Account<'info, SessionAuthority>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RevokeSessionKey<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    pub game: Account<'info, GameState>,
+
+    #[account(
+        mut,
+        close = player,
+        seeds = [SESSION_SEED, game.key().as_ref(), player.key().as_ref()],
+        bump = session_authority.bump,
+        constraint = session_authority.player == player.key() @ BattleshipError::SessionPlayerMismatch,
+    )]
+    pub session_authority: Account<'info, SessionAuthority>,
+}
+
+#[derive(Accounts)]
+pub struct ResetActiveGames<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PROFILE_SEED, player.key().as_ref()],
+        bump = player_profile.profile_bump,
+        constraint = player_profile.player == player.key() @ BattleshipError::NotAPlayer,
+    )]
+    pub player_profile: Account<'info, PlayerProfile>,
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Resolves the actual player wallet from either a direct wallet signer or a session key signer.
+/// If a session authority is provided and its session_key matches the signer, returns session.player.
+/// Otherwise returns the signer itself (backward-compatible wallet signing).
+fn resolve_player(
+    signer: Pubkey,
+    session_authority: &Option<Account<SessionAuthority>>,
+    game_key: Pubkey,
+) -> Result<Pubkey> {
+    if let Some(session) = session_authority {
+        if session.session_key == signer {
+            require!(
+                session.game == game_key,
+                BattleshipError::SessionGameMismatch,
+            );
+            require!(
+                Clock::get()?.unix_timestamp < session.expires_at,
+                BattleshipError::SessionExpired,
+            );
+            return Ok(session.player);
+        }
+    }
+    Ok(signer)
 }

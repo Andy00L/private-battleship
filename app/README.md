@@ -21,6 +21,12 @@ npm start
 
 Requires Node 18+. Connects to Solana devnet and MagicBlock TEE at `https://tee.magicblock.app`.
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_DEBUG_LOG` | `true` (in .env.local) | Enable debug logger and floating download button |
+
 ## Stack
 
 | Package | Version | Role |
@@ -28,7 +34,7 @@ Requires Node 18+. Connects to Solana devnet and MagicBlock TEE at `https://tee.
 | Next.js | 16.2.2 | App Router framework |
 | React | 19.2.4 | UI library |
 | TypeScript | ^5 | Strict mode |
-| Tailwind CSS | 4 | Styling |
+| Tailwind CSS | 4 | Styling (via @tailwindcss/postcss) |
 | framer-motion | ^12.38.0 | Cell animations, result banners |
 | @solana/web3.js | ^1.98.4 | Solana RPC |
 | @coral-xyz/anchor | ^0.32.1 | Program client |
@@ -41,7 +47,12 @@ Requires Node 18+. Connects to Solana devnet and MagicBlock TEE at `https://tee.
 
 ```mermaid
 graph TD
-    PAGE[page.tsx] --> LOBBY[GameLobby]
+    LAYOUT[layout.tsx] --> PROVIDERS[SolanaProviders]
+    PROVIDERS --> PAGE[page.tsx]
+    LAYOUT --> DEBUG_BTN[DebugLogButton]
+    PAGE --> HERO[HeroVideo]
+
+    PAGE --> LOBBY[GameLobby]
     PAGE --> PLACEMENT[PlacementPhase]
     PAGE --> BATTLE[BattlePhase]
     PAGE --> RESULT[ResultPhase]
@@ -57,8 +68,23 @@ graph TD
     HOOK -.-> TEE_MGR[TeeConnectionManager]
     HOOK -.-> HASH[generateBoardHash]
     HOOK -.-> PROGRAM[program.ts - PDAs + Anchor]
+    HOOK -.-> DBG[debug-logger.ts]
     LOBBY -.-> ORACLE[oracle.ts - SOL/USD]
 ```
+
+## Components
+
+| Component | File | Lines | Purpose |
+|-----------|------|-------|---------|
+| `GameLobby` | `GameLobby.tsx` | 139 | Create game (buy-in + optional invite) or join by address |
+| `PlacementPhase` | `PlacementPhase.tsx` | 296 | Click-to-place ships, R to rotate, fleet roster panel |
+| `BattlePhase` | `BattlePhase.tsx` | 147 | Two grids + turn indicator + timeout bar + TX log |
+| `BattleGrid` | `BattleGrid.tsx` | 113 | Reusable 6x6 grid with A-F/1-6 labels, framer-motion animations |
+| `TransactionLog` | `TransactionLog.tsx` | 69 | Color-coded TX entries with latency (max 16 visible) |
+| `ResultPhase` | `ResultPhase.tsx` | 110 | Winner/loser banner, both boards revealed, claim/verify buttons |
+| `HeroVideo` | `HeroVideo.tsx` | 27 | Full-screen looping video background with dark overlay |
+| `DebugLogButton` | `DebugLogButton.tsx` | 23 | Floating bottom-left button, downloads debug log, env-gated |
+| `wallet-provider` | `wallet-provider.tsx` | 24 | ConnectionProvider + WalletProvider + WalletModalProvider (Phantom, devnet) |
 
 ## Phase Routing
 
@@ -97,7 +123,7 @@ The grid uses `framer-motion` for hover scaling (1.08x) and tap compression (0.9
 
 ## useGame Hook
 
-The central state manager for the entire game (1127 lines). Returns phase, game state, grids, and action functions.
+The central state manager for the entire game (1563 lines). Returns phase, game state, grids, and action functions.
 
 ### State
 
@@ -116,6 +142,10 @@ The central state manager for the entire game (1127 lines). Returns phase, game 
 | `isWinner` | `boolean` | Whether this player won |
 | `prizeClaimed` | `boolean` | Whether prize has been claimed |
 | `boardSalt` | `Uint8Array \| null` | Salt for verify_board |
+| `setupStatus` | `string` | Status message during orchestration |
+| `setupError` | `string \| null` | Error message if orchestration fails |
+| `error` | `string \| null` | Top-level error (balance, validation) |
+| `timeoutDeadline` | `number \| null` | Timestamp when 5-min timeout is claimable |
 
 ### Actions
 
@@ -124,9 +154,11 @@ The central state manager for the entire game (1127 lines). Returns phase, game 
 | `createGame(buyInLamports, invitedPlayer)` | Start a new game. Generates board hash, stores salt. |
 | `joinGame(gameAddress)` | Join an existing game by its PDA address. |
 | `placeShips(placements)` | Place ships on grid. Sends create/join TX, starts orchestration. |
-| `fire(row, col)` | Fire at opponent's grid (TEE transaction). |
+| `fire(row, col)` | Fire at opponent's grid (TEE transaction, session key or wallet). |
 | `claimPrize()` | Winner claims the pot. |
+| `claimTimeout()` | Claim win by opponent inactivity. |
 | `verifyBoard()` | Post-game hash verification using stored salt. |
+| `retrySetup()` | Re-run orchestration after failure. |
 
 ### Orchestration Engine
 
@@ -134,23 +166,27 @@ After `placeShips()` sends the create/join transaction, the hook automatically r
 
 ```mermaid
 flowchart TD
-    START[placeShips called] --> TX[Send create_game or join_game TX]
-    TX --> INIT_TEE[Initialize TeeConnectionManager]
-    INIT_TEE --> SUB_BASE[Subscribe to GameState on base layer]
+    START[placeShips called] --> PROFILE[Step 0: ensureProfile + assertBalance]
+    PROFILE --> TX[Step 1: Send create_game or join_game TX]
+    TX --> SUB_BASE[Step 2: Subscribe to GameState on base layer]
     SUB_BASE --> WAIT_PLACING{status == Placing?}
-    WAIT_PLACING -->|Yes| DEL_BOARD[delegate_board for my board]
+    WAIT_PLACING -->|Yes| DEL_BOARD[Step 3: delegate_board for my board]
     DEL_BOARD --> WAIT_BOARDS{boards_delegated >= 2?}
-    WAIT_BOARDS -->|Yes| VRF_REQ[request_turn_order]
+    WAIT_BOARDS -->|Yes| VRF_REQ[Step 5: request_turn_order]
     VRF_REQ --> WAIT_TURN{current_turn set?}
-    WAIT_TURN -->|Yes| DEL_GS[delegate_game_state]
-    DEL_GS --> SWITCH_SUB[Switch subscription: base -> TEE]
-    SWITCH_SUB --> PLACE_TEE[place_ships on TEE]
+    WAIT_TURN -->|Yes| DEL_GS[Step 6: delegate_game_state]
+    DEL_GS --> INIT_TEE[Step 7: Initialize TeeConnectionManager]
+    INIT_TEE --> SESSION[Step 7b: register_session_key]
+    SESSION --> SWITCH_SUB[Switch subscription: base to TEE]
+    SWITCH_SUB --> PLACE_TEE[Step 8: place_ships on TEE]
     PLACE_TEE --> DONE[Orchestration complete]
 ```
 
 Each step retries on transient network errors. Progress is tracked with refs (not React state) to avoid stale closures in subscription callbacks.
 
 Auto-settlement: when the hook detects `status === Finished`, it automatically calls `settle_game` to commit results and reveal boards.
+
+Auto-timeout recovery: when creating a game triggers `TooManyGames` (error 6020), the hook calls `autoClaimTimeouts()` to scan and claim timeouts on stale games, freeing up active game slots.
 
 ### Subscription Management
 
@@ -181,7 +217,7 @@ flowchart LR
 
 - Verifies TEE hardware attestation via `verifyTeeRpcIntegrity` before first use
 - Acquires auth token by signing a message with the connected wallet
-- Creates a `Connection` with the token as a URL query parameter
+- Creates a `Connection` with the token as a URL query parameter (both HTTP and WebSocket)
 - Auto-refreshes every 240 seconds (4 minutes, before the 5-minute expiry)
 - `destroy()` clears the timer and nullifies the connection
 
@@ -220,15 +256,42 @@ All on-chain addresses, PDA derivation functions, and the Anchor program factory
 | `PERMISSION_PROGRAM_ID` | `PublicKey` | MagicBlock Permission Program |
 | `DELEGATION_PROGRAM_ID` | `PublicKey` | MagicBlock Delegation Program |
 | `TEE_VALIDATOR` | `PublicKey` | Devnet TEE validator |
+| `MAGIC_PROGRAM_ID` | `PublicKey` | Magic Program |
+| `MAGIC_CONTEXT_ID` | `PublicKey` | Magic Context |
 | `VRF_PROGRAM_ID` | `PublicKey` | VRF oracle program |
 | `ORACLE_QUEUE` | `PublicKey` | VRF oracle queue |
-| `getGamePda(playerA, gameId)` | `[PublicKey, number]` | Derive game PDA |
-| `getBoardPda(game, player)` | `[PublicKey, number]` | Derive board PDA |
-| `getProfilePda(player)` | `[PublicKey, number]` | Derive profile PDA |
-| `getLeaderboardPda()` | `[PublicKey, number]` | Derive leaderboard PDA |
-| `getProgram(conn, wallet)` | `Program` | Create Anchor program instance |
+| `SLOT_HASHES` | `PublicKey` | Sysvar SlotHashes |
+| `getGamePda(playerA, gameId)` | `[PublicKey, number]` | Seeds: ["game", playerA, gameId_le_8bytes] |
+| `getBoardPda(game, player)` | `[PublicKey, number]` | Seeds: ["board", game, player] |
+| `getProfilePda(player)` | `[PublicKey, number]` | Seeds: ["profile", player] |
+| `getLeaderboardPda()` | `[PublicKey, number]` | Seeds: ["leaderboard"] |
+| `getProgramIdentityPda()` | `[PublicKey, number]` | Seeds: ["identity"] |
+| `getSessionAuthorityPda(game, player)` | `[PublicKey, number]` | Seeds: ["session", game, player] |
+| `getProgram(conn, wallet)` | `Program` | Create Anchor program instance from IDL |
 
-PDA seeds match the Rust program: `"game"`, `"board"`, `"profile"`, `"leaderboard"`.
+PDA seeds match the Rust program constants: `"game"`, `"board"`, `"profile"`, `"leaderboard"`, `"identity"`, `"session"`.
+
+### Debug Logger (`lib/debug-logger.ts`)
+
+Categorized logging system with downloadable output. Controlled by `NEXT_PUBLIC_DEBUG_LOG` env var.
+
+| Category | Used For |
+|----------|----------|
+| `TX` | Transaction sends and confirmations |
+| `STATE` | Game state changes |
+| `ORCH` | Orchestration step progress |
+| `SUB` | Subscription events |
+| `RPC` | RPC calls and responses |
+| `WALLET` | Wallet connection events |
+| `TEE` | TEE connection lifecycle |
+| `USER` | User actions (create, join, fire) |
+| `ERROR` | Error details with stack traces |
+| `POLL` | Polling game state |
+| `SESSION` | Session key registration and usage |
+
+Methods: `log(category, message, data?)`, `error(message, err)`, `download()`, `isEnabled()`, `getLogCount()`.
+
+The logger includes a custom JSON replacer that converts `PublicKey` to base58, `BN` to string, `Uint8Array` to `[Uint8Array length=N]`, and `bigint` to string.
 
 ## Theme
 

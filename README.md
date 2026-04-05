@@ -28,7 +28,7 @@ The program deploys to `9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR` on devnet.
 
 Two players. Each has a 6x6 grid. Each places 5 ships (sizes 3, 2, 2, 1, 1). Players take turns firing at coordinates. First to sink all opponent ships wins the pot.
 
-Every action is an on-chain transaction. Ship placements are invisible to everyone except the owner. Shots land in 30-50ms via TEE. VRF determines who goes first using combined seeds from both players (neither can rig it).
+Every action is an on-chain transaction. Ship placements are invisible to everyone except the owner. Shots land in 30-50ms via TEE. VRF determines who goes first using combined seeds from both players (neither can rig it). Session keys eliminate wallet popups during gameplay.
 
 Buy-ins range from 0.001 SOL to 100 SOL. Winner takes the full pot. Players can run up to 3 concurrent games.
 
@@ -56,6 +56,7 @@ graph TD
         GS_L1[GameState PDA]
         BA_L1[Board A PDA]
         BB_L1[Board B PDA]
+        SA[SessionAuthority PDA]
     end
 
     subgraph "TEE (Intel TDX via MagicBlock)"
@@ -70,6 +71,7 @@ graph TD
         TEE_CONN[TeeConnectionManager]
         HASH[Board Hash Generator]
         ORCH[Orchestration Engine]
+        SESS[Session Key Manager]
     end
 
     UI --> TEE_CONN
@@ -79,6 +81,7 @@ graph TD
     TEE_CONN --> BB_TEE
     HASH --> GS_L1
     ORCH -->|auto-delegates, VRF, place| GS_L1
+    SESS --> SA
 
     GS_L1 -->|delegate| GS_TEE
     BA_L1 -->|delegate private| BA_TEE
@@ -97,19 +100,19 @@ solana-blitz-v3/
   rust-toolchain.toml                      # Rust 1.89.0
   programs/battleship/
     Cargo.toml                             # anchor-lang 0.32.1, SDK deps
-    src/lib.rs                             # Anchor program (16 instructions, 1522 lines)
+    src/lib.rs                             # Anchor program (18 instructions, 1715 lines)
   app/                                     # Next.js 16 frontend
     package.json                           # next 16.2.2, react 19.2.4
     src/
       app/                                 # App Router (layout, page, globals.css)
-      components/                          # 7 React components
-      hooks/useGame.ts                     # Game state + orchestration (1127 lines)
-      lib/                                 # Utilities (TEE, board hash, oracle, program)
+      components/                          # 9 React components
+      hooks/useGame.ts                     # Game state + orchestration (1563 lines)
+      lib/                                 # Utilities (TEE, board hash, oracle, program, debug logger)
 ```
 
 ## On-Chain Program
 
-16 instruction handlers across 4 phases, 4 account types, 28 error codes.
+18 instruction handlers across 5 phases, 5 account types, 36 error codes. The `#[ephemeral]` macro also generates a 19th instruction (`process_undelegation`) that handles delegation callbacks from the TEE runtime.
 
 | # | Instruction | Phase | Description |
 |---|-------------|-------|-------------|
@@ -122,13 +125,15 @@ solana-blitz-v3/
 | 7 | `delegate_game_state` | Base Layer | Delegate GameState to TEE with public ACL |
 | 8 | `request_turn_order` | Base Layer | VRF randomness request with XOR of both seeds |
 | 9 | `callback_turn_order` | VRF Callback | Set first turn from VRF randomness |
-| 10 | `place_ships` | TEE | Place 5 ships on 6x6 grid with full validation |
-| 11 | `fire` | TEE | Shoot at opponent grid, check hit/miss/sunk/win |
-| 12 | `update_leaderboard` | Magic Action | Post-commit leaderboard update on base layer |
-| 13 | `settle_game` | TEE | Commit state, reveal boards, undelegate all accounts |
-| 14 | `claim_prize` | Base Layer | Winner withdraws pot, update both profiles |
-| 15 | `claim_timeout` | Base Layer | Claim on opponent inactivity (3 status branches) |
-| 16 | `verify_board` | Base Layer | Commit-reveal hash verification (anyone can call) |
+| 10 | `register_session_key` | Base Layer | Register a session keypair for popup-free signing (max 1 hour) |
+| 11 | `revoke_session_key` | Base Layer | Revoke and close a session key account |
+| 12 | `place_ships` | TEE | Place 5 ships on 6x6 grid with full validation |
+| 13 | `fire` | TEE | Shoot at opponent grid, check hit/miss/sunk/win |
+| 14 | `update_leaderboard` | Magic Action | Post-commit leaderboard update on base layer |
+| 15 | `settle_game` | TEE | Commit state, reveal boards, undelegate all accounts |
+| 16 | `claim_prize` | Base Layer | Winner withdraws pot, update both profiles |
+| 17 | `claim_timeout` | Base Layer | Claim on opponent inactivity (3 status branches) |
+| 18 | `verify_board` | Base Layer | Commit-reveal hash verification (anyone can call) |
 
 ### Account Layout
 
@@ -138,6 +143,7 @@ solana-blitz-v3/
 | PlayerBoard | 136 | `["board", game, player]` | Private (owner-only ACL) |
 | PlayerProfile | 58 | `["profile", player]` | Base layer (never delegated) |
 | Leaderboard | 455 | `["leaderboard"]` | Base layer (never delegated) |
+| SessionAuthority | 113 | `["session", game, player]` | Base layer (closed on revoke) |
 
 All accounts use fixed-size arrays. No `Vec` in any account struct.
 
@@ -150,22 +156,52 @@ All accounts use fixed-size arrays. No `Vec` in any account struct.
 | `MAX_BUY_IN` | 100,000,000,000 lamports (100 SOL) |
 | `MAX_ACTIVE_GAMES` | 3 per player |
 | `MAX_LEADERBOARD_ENTRIES` | 10 |
+| `MAX_SESSION_DURATION` | 3600 seconds (1 hour) |
 | Grid size | 6x6 (36 cells) |
 | Ship sizes | 3, 2, 2, 1, 1 (5 ships, 9 total cells) |
 
 ### Error Codes
 
-28 error codes from 6000 to 6027. Key ones:
+36 error codes from 6000 to 6035:
 
 | Code | Name | When |
 |------|------|------|
-| 6000 | GameFull | Joining a game that already has two players |
-| 6007 | OutOfBounds | Ship placement or fire coordinates outside 6x6 |
-| 6009 | NotYourTurn | Firing when it's the opponent's turn |
-| 6011 | AlreadyFired | Firing at a cell that was already targeted |
-| 6022 | BoardTampered | verify_board hash mismatch (TEE tampering detected) |
-| 6025 | BoardsNotDelegated | Trying to delegate game state before both boards |
-| 6027 | InvalidOpponentProfile | Wrong opponent profile PDA in claim_timeout |
+| 6000 | `GameFull` | Joining a game that already has two players |
+| 6001 | `NotInvited` | Joining a game with an invite restriction |
+| 6002 | `NotYourBoard` | Operating on another player's board |
+| 6003 | `WrongPhase` | Action called during wrong game status |
+| 6004 | `AlreadyPlaced` | Placing ships when already placed |
+| 6005 | `InvalidShipCount` | Not exactly 5 ships |
+| 6006 | `InvalidShipSizes` | Ship sizes not [3, 2, 2, 1, 1] |
+| 6007 | `OutOfBounds` | Ship placement or fire coordinates outside 6x6 |
+| 6008 | `ShipsOverlap` | Two ships placed on the same cell |
+| 6009 | `NotYourTurn` | Firing when it's the opponent's turn |
+| 6010 | `GameNotActive` | Firing when game is not in Playing status |
+| 6011 | `AlreadyFired` | Firing at a cell that was already targeted |
+| 6012 | `WrongTarget` | Firing at your own board instead of opponent's |
+| 6013 | `NotAPlayer` | Caller is not player_a or player_b |
+| 6014 | `GameNotFinished` | Claiming prize before game ends |
+| 6015 | `NotWinner` | Non-winner trying to claim prize |
+| 6016 | `BuyInTooLow` | Buy-in below 0.001 SOL minimum |
+| 6017 | `BuyInTooHigh` | Buy-in above 100 SOL maximum |
+| 6018 | `CannotCancel` | Cancelling a game that already has a second player |
+| 6019 | `NotTimedOut` | Claiming timeout before 300 seconds elapsed |
+| 6020 | `TooManyGames` | Player already in 3 active games |
+| 6021 | `HashAlreadySet` | Board hash already committed |
+| 6022 | `BoardTampered` | `verify_board` hash mismatch (TEE tampering detected) |
+| 6023 | `HashNotCommitted` | Hash not yet set |
+| 6024 | `NotPlayerA` | Non-creator trying to cancel |
+| 6025 | `BoardsNotDelegated` | Delegating game state before both boards delegated |
+| 6026 | `Overflow` | Integer overflow in arithmetic |
+| 6027 | `InvalidOpponentProfile` | Wrong opponent profile PDA in claim_timeout |
+| 6028 | `AccountAlreadyDelegated` | Re-delegating an already delegated account |
+| 6029 | `InvalidGamePda` | Game PDA does not match expected derivation |
+| 6030 | `InvalidTeeValidator` | Validator address does not match TEE_VALIDATOR_PUBKEY |
+| 6031 | `SessionExpired` | Session key past its expiry timestamp |
+| 6032 | `InvalidSessionKey` | Session key does not match registered key |
+| 6033 | `SessionGameMismatch` | Session authority registered for a different game |
+| 6034 | `SessionPlayerMismatch` | Session authority registered for a different player |
+| 6035 | `SessionDurationTooLong` | Requested duration exceeds MAX_SESSION_DURATION |
 
 ## Privacy Model
 
@@ -209,9 +245,13 @@ Next.js 16 (App Router) with TypeScript, Tailwind CSS 4, and framer-motion.
 | `BattleGrid` | Reusable 6x6 grid with A-F/1-6 labels, hit/miss/ship/water cells |
 | `TransactionLog` | Real-time TX log sidebar with latency and result color coding |
 | `ResultPhase` | Revealed boards, claim prize button, verify board button |
+| `HeroVideo` | Full-screen looping video background with dark overlay |
+| `DebugLogButton` | Floating debug log download button (enabled via env var) |
 | `wallet-provider` | Phantom wallet adapter on Solana devnet |
 
-The `useGame` hook (1127 lines) manages the entire game lifecycle. It includes an orchestration engine that automatically handles the multi-step delegation and VRF flow after a player creates or joins a game. The player only needs to place ships and fire; everything else (board delegation, VRF request, game state delegation) happens automatically.
+The `useGame` hook (1563 lines) manages the entire game lifecycle. It includes an orchestration engine that automatically handles the multi-step delegation and VRF flow after a player creates or joins a game. The player only needs to place ships and fire; everything else (profile creation, board delegation, VRF request, game state delegation, session key registration) happens automatically.
+
+Session keys allow the `fire` and `place_ships` instructions to be signed without wallet popups. The hook generates a keypair, registers it on-chain with a 1-hour expiry, and uses it for TEE transactions.
 
 Commit-reveal data (salt and ship placements) persists in `sessionStorage`, so refreshing the browser mid-game doesn't lose the data needed for post-game `verify_board`.
 
@@ -221,6 +261,7 @@ Commit-reveal data (salt and ship placements) persists in `sessionStorage`, so r
 | Board Hash | `lib/board-hash.ts` | SHA-256 hash generation (matches on-chain `verify_board`) |
 | Oracle | `lib/oracle.ts` | SOL/USD price display via MagicBlock Pricing Oracle |
 | Program | `lib/program.ts` | PDA derivation, Anchor program factory, all program addresses |
+| Debug Logger | `lib/debug-logger.ts` | Categorized logging (TX, STATE, ORCH, SUB, etc.) with download |
 
 ## Dependencies
 
@@ -259,6 +300,7 @@ Commit-reveal data (salt and ship placements) persists in `sessionStorage`, so r
 | VRF Program | `Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz` |
 | VRF Oracle Queue | `Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh` |
 | Magic Program | `Magic11111111111111111111111111111111111111` |
+| Magic Context | `MagicContext1111111111111111111111111111111` |
 | TEE Validator (devnet) | `FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA` |
 | TEE RPC | `https://tee.magicblock.app` |
 | TEE WebSocket | `wss://tee.magicblock.app` |
@@ -276,6 +318,8 @@ The contract has been through iterative security review. Key protections:
 - **VRF fairness**: Combined seed is `seed_a XOR seed_b`. Neither player can predict or manipulate the outcome alone.
 - **Commit-reveal integrity**: SHA-256 hash of ship placements + random salt is committed at game creation. Post-game verification proves the TEE didn't modify boards.
 - **Concurrent game limit**: `MAX_ACTIVE_GAMES = 3` enforced at create and join.
+- **Session key safety**: Session keys are scoped to a specific game and player, expire after at most 1 hour, and are validated on every use. The `resolve_player` helper checks expiry, game match, and player match before accepting a session-signed transaction.
+- **TEE validator pinning**: `delegate_board` and `delegate_game_state` enforce that the validator address matches `TEE_VALIDATOR_PUBKEY` via Anchor address constraints.
 - **Session persistence**: Board salt and placements stored in `sessionStorage` keyed by game PDA. Survives page refreshes.
 
 ## Limitations

@@ -5,19 +5,11 @@ const ORACLE_PRICE_ACCOUNT_ADDRESS =
   "11111111111111111111111111111111"; // System program as placeholder
 
 export async function getSolPriceUsd(
-  connection: Connection,
+  _connection: Connection,
 ): Promise<number> {
-  try {
-    const oracleAccount = new PublicKey(ORACLE_PRICE_ACCOUNT_ADDRESS);
-    const info = await connection.getAccountInfo(oracleAccount);
-    if (!info) return 0;
-    // Parse MagicBlock Oracle price account format
-    // Return price in USD with 2 decimal precision
-    const price = 0; // TODO: parse from info.data once Oracle account format is documented
-    return price;
-  } catch {
-    return 0;
-  }
+  // Oracle integration pending — returns 0 until price account is configured.
+  // Avoids wasting an RPC call on the placeholder system program address.
+  return 0;
 }
 
 export function formatBuyInDisplay(

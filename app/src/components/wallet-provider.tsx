@@ -11,7 +11,19 @@ import { clusterApiUrl } from "@solana/web3.js";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function SolanaProviders({ children }: { children: React.ReactNode }) {
-  const endpoint = useMemo(() => clusterApiUrl("devnet"), []);
+  const endpoint = useMemo(() => {
+    const custom = process.env.NEXT_PUBLIC_RPC_URL;
+    if (!custom || custom.trim() === "") {
+      return clusterApiUrl("devnet");
+    }
+    try {
+      new URL(custom);
+      return custom;
+    } catch {
+      console.error(`Invalid NEXT_PUBLIC_RPC_URL: "${custom}". Falling back to public devnet.`);
+      return clusterApiUrl("devnet");
+    }
+  }, []);
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
   return (
