@@ -8,39 +8,36 @@ System architecture for Private Battleship. Covers account relationships, instru
 
 The program runs across two execution contexts: Solana L1 (base layer) and MagicBlock's TEE (Trusted Execution Environment running Intel TDX). Accounts are created on L1, delegated to the TEE for private gameplay, then committed back to L1 for settlement.
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           FRONTEND (Next.js 16.2.2)                          │
-│                                                                              │
-│  useGame.ts (2040 lines)                                                     │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
-│  │  GameLobby   │  │  Placement   │  │   Battle     │  │   Result     │     │
-│  │  create/join │  │  place_ships │  │   fire       │  │  settle/claim│     │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
-│         │                  │                  │                  │            │
-│         │     Batched TX   │   Session Key    │   Session Key    │  Session   │
-│         │     (1 popup)    │   (0 popups)     │   (0 popups)     │  Key       │
-├─────────┼──────────────────┼──────────────────┼──────────────────┼────────────┤
-│         │                  │                  │                  │            │
-│  ┌──────▼──────────────────┼──────────────────┼──────────────────┼──────┐     │
-│  │          Solana Devnet (Base Layer, L1)     │                  │      │     │
-│  │  create_game            │                  │                  │      │     │
-│  │  join_game              │                  │                  │      │     │
-│  │  delegate_board (x2)    │                  │             claim_prize  │     │
-│  │  delegate_game_state    │                  │             verify_board │     │
-│  │  request_turn_order     │                  │                  │      │     │
-│  │  register_session_key   │                  │                  │      │     │
-│  └─────────────────────────┼──────────────────┼──────────────────┼──────┘     │
-│                            │                  │                  │            │
-│  ┌─────────────────────────▼──────────────────▼──────────────────▼──────┐     │
-│  │           TEE Validator (Intel TDX, PER)                             │     │
-│  │  FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA                     │     │
-│  │                                                                      │     │
-│  │  place_ships  -- writes to private PlayerBoard                       │     │
-│  │  fire         -- reads opponent's private board, writes public hits  │     │
-│  │  settle_game  -- commits game + both boards to L1                    │     │
-│  └──────────────────────────────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Frontend["Frontend - Next.js 16.2.2"]
+        UG["useGame.ts - 2040 lines"]
+        GL["GameLobby - create/join"]
+        PL["Placement - place_ships"]
+        BT["Battle - fire"]
+        RS["Result - settle/claim"]
+    end
+    subgraph L1["Solana Devnet - Base Layer"]
+        CG["create_game"]
+        JG["join_game"]
+        DB["delegate_board x2"]
+        DGS["delegate_game_state"]
+        RTO["request_turn_order"]
+        RSK["register_session_key"]
+        CP["claim_prize"]
+        VB["verify_board"]
+    end
+    subgraph TEELayer["TEE Validator - Intel TDX PER"]
+        TEEID["FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA"]
+        PS["place_ships - writes to private PlayerBoard"]
+        FI["fire - reads private board, writes public hits"]
+        SG["settle_game - commits game + both boards to L1"]
+    end
+    GL -->|"Batched TX, 1 popup"| CG
+    PL -->|"Session Key, 0 popups"| PS
+    BT -->|"Session Key, 0 popups"| FI
+    RS -->|"Session Key"| SG
+    RS -->|"Session Key"| CP
 ```
 
 ## Directory Structure
@@ -72,7 +69,7 @@ solana-blitz-v3/
 │           ├── tee-connection.ts    # 105 lines
 │           ├── debug-logger.ts      #  90 lines
 │           ├── board-hash.ts        #  36 lines
-│           ├── sfx.ts               #  69 lines
+│           ├── sfx.ts              #  69 lines
 │           ├── oracle.ts            #  25 lines
 │           └── idl.json             # Anchor IDL (auto-generated)
 ├── Anchor.toml
@@ -84,179 +81,144 @@ Total frontend: 4334 lines across all files.
 
 ## Game Lifecycle Sequence Diagram
 
-```
-Player A                Base Layer              TEE Validator            Player B
-   │                        │                        │                      │
-   │-- initialize_profile ->│                        │                      │
-   │                        │                        │<-- initialize_profile-│
-   │                        │                        │                      │
-   │-- create_game -------->│                        │                      │
-   │   (+ ensureProfile     │                        │                      │
-   │    + register_session) │                        │                      │
-   │   [1 wallet popup]     │                        │                      │
-   │                        │                        │                      │
-   │                        │                        │<---- join_game ------│
-   │                        │                        │   (+ ensureProfile   │
-   │                        │                        │    + delegate_board  │
-   │                        │                        │    + register_session│
-   │                        │                        │   [1 wallet popup]   │
-   │                        │                        │                      │
-   │-- delegate_board ----->│-- board A to TEE ----->│                      │
-   │-- delegate_game_state->│-- GameState to TEE --->│                      │
-   │-- request_turn_order ->│-- VRF(seed_a^seed_b) ->│                      │
-   │                        │<-- callback_turn_order-│                      │
-   │                        │                        │                      │
-   │------- place_ships ----------------------------------->│               │
-   │   [session key, 0 popups]                       │<---- place_ships ---│
-   │                        │                        │   [session key]      │
-   │                        │                        │                      │
-   │                        │                        │  (status -> Playing) │
-   │                        │                        │                      │
-   │----------- fire -------------------------------->     │               │
-   │   [session key]        │                        │<-------- fire ------│
-   │                        │                        │   [session key]      │
-   │              ... turns repeat until winner ...   │                      │
-   │                        │                        │                      │
-   │------- settle_game ----------------------------------->│               │
-   │                        │<-- commit game+boards -│                      │
-   │                        │<-- update_leaderboard -│ (Magic Action)       │
-   │                        │                        │                      │
-   │-- claim_prize -------->│                        │                      │
-   │   [session key]        │                        │                      │
-   │                        │                        │                      │
-   │-- verify_board ------->│  (anyone can call)     │                      │
+```mermaid
+sequenceDiagram
+    participant PA as Player A
+    participant BL as Base Layer
+    participant TEE as TEE Validator
+    participant PB as Player B
+    PA->>BL: initialize_profile
+    PB->>BL: initialize_profile
+    Note over PA,BL: Batch TX - 1 wallet popup
+    PA->>BL: create_game + ensureProfile + register_session_key
+    Note over PB,BL: Batch TX - 1 wallet popup
+    PB->>BL: join_game + ensureProfile + delegate_board + register_session_key
+    PA->>BL: delegate_board
+    BL->>TEE: board A to TEE
+    PA->>BL: delegate_game_state
+    BL->>TEE: GameState to TEE
+    PA->>BL: request_turn_order
+    BL->>TEE: VRF with seed_a XOR seed_b
+    TEE-->>BL: callback_turn_order
+    Note over PA,PB: Session key signing - 0 popups
+    PA->>TEE: place_ships
+    PB->>TEE: place_ships
+    Note over TEE: status becomes Playing
+    PA->>TEE: fire
+    PB->>TEE: fire
+    Note over PA,PB: turns repeat until winner
+    PA->>TEE: settle_game
+    TEE->>BL: commit game + boards
+    TEE->>BL: update_leaderboard via Magic Action
+    PA->>BL: claim_prize via session key
+    PA->>BL: verify_board - anyone can call
 ```
 
 ## Account Relationships (ER Diagram)
 
 5 account types. Fixed-size arrays throughout (no Vec).
 
+```mermaid
+erDiagram
+    PLAYERPROFILE {
+        pubkey player PK
+        u8 active_games
+        u32 total_wins
+        u32 total_games
+        u32 total_shots_fired
+        u32 total_hits
+        u8 profile_bump
+    }
+    GAMESTATE {
+        u64 game_id PK
+        pubkey player_a FK
+        pubkey player_b FK
+        pubkey invited_player
+        u8 status
+        pubkey current_turn
+        u16 turn_count
+        u64 pot_lamports
+        u64 buy_in_lamports
+        u8x36 board_a_hits
+        u8x36 board_b_hits
+        u8 ships_remaining_a
+        u8 ships_remaining_b
+        pubkey winner
+        bool has_winner
+        u8x32 vrf_seed
+        u8x32 seed_a
+        u8x32 seed_b
+        u8x32 board_hash_a
+        u8x32 board_hash_b
+        i64 last_action_ts
+        u8 boards_delegated
+        u8 game_bump
+    }
+    PLAYERBOARD {
+        pubkey owner FK
+        pubkey game FK
+        u8x36 grid
+        Shipx5 ships
+        bool ships_placed
+        bool all_sunk
+        u8 board_bump
+    }
+    SESSIONAUTHORITY {
+        pubkey player FK
+        pubkey session_key PK
+        i64 expires_at
+        u8 session_bump
+    }
+    LEADERBOARD {
+        u64 total_games_played
+        Entryx10 entries
+        i64 last_updated
+        u8 leaderboard_bump
+    }
+    PLAYERPROFILE ||--o{ GAMESTATE : "1-N up to MAX_ACTIVE_GAMES 3"
+    GAMESTATE ||--|{ PLAYERBOARD : "has 2 one board per player"
 ```
-┌─────────────────────────────┐
-│       PlayerProfile          │     PDA: ["profile", player]
-│  (58 bytes, never delegated) │     One per player, lives on L1
-├─────────────────────────────┤
-│  player: Pubkey              │--┐
-│  active_games: u8            │  │  Tracks lifetime stats
-│  total_wins: u32             │  │  and concurrent game limit
-│  total_games: u32            │  │
-│  total_shots_fired: u32      │  │
-│  total_hits: u32             │  │
-│  profile_bump: u8            │  │
-└─────────────────────────────┘  │
-                                  │
-              ┌───────────────────┘
-              │
-              │  1:N (up to MAX_ACTIVE_GAMES=3)
-              │
-              v
-┌─────────────────────────────┐       ┌─────────────────────────────┐
-│        GameState             │       │      SessionAuthority        │
-│  (446 bytes, public TEE)     │       │  (113 bytes, never delegated)│
-├─────────────────────────────┤       ├─────────────────────────────┤
-│  game_id: u64                │       │  player: Pubkey              │
-│  player_a: Pubkey            │--┐    │  session_key: Pubkey         │
-│  player_b: Pubkey            │--┤    │  expires_at: i64             │
-│  invited_player: Pubkey      │  │    │  session_bump: u8            │
-│  status: u8                  │  │    └─────────────────────────────┘
-│  current_turn: Pubkey        │  │      PDA: ["session", player, session_pubkey]
-│  turn_count: u16             │  │      One per player per game session
-│  pot_lamports: u64           │  │      Expires after MAX_SESSION_DURATION (3600s)
-│  buy_in_lamports: u64        │  │
-│  board_a_hits: [u8; 36]     │  │
-│  board_b_hits: [u8; 36]     │  │
-│  ships_remaining_a: u8       │  │
-│  ships_remaining_b: u8       │  │
-│  winner: Pubkey              │  │
-│  has_winner: bool            │  │
-│  vrf_seed: [u8; 32]         │  │
-│  seed_a: [u8; 32]           │  │
-│  seed_b: [u8; 32]           │  │
-│  board_hash_a: [u8; 32]     │  │
-│  board_hash_b: [u8; 32]     │  │
-│  last_action_ts: i64         │  │
-│  boards_delegated: u8        │  │
-│  game_bump: u8               │  │
-└─────────────────────────────┘  │
-   PDA: ["game", player_a,       │
-          game_id]                │
-                                  │
-              ┌───────────────────┘
-              │  1:2 (one board per player per game)
-              v
-┌─────────────────────────────┐
-│       PlayerBoard            │
-│  (136 bytes, private TEE)    │
-├─────────────────────────────┤
-│  owner: Pubkey               │
-│  game: Pubkey                │--> references GameState
-│  grid: [u8; 36]             │    0=empty, 1=ship, 2=hit_ship, 3=miss_water
-│  ships: [Ship; 5]           │    Ship: start_row, start_col, size, horizontal, hits
-│  ships_placed: bool          │
-│  all_sunk: bool              │
-│  board_bump: u8              │
-└─────────────────────────────┘
-   PDA: ["board", game, player]
 
-┌─────────────────────────────┐
-│       Leaderboard            │
-│  (455 bytes, never delegated)│
-├─────────────────────────────┤
-│  total_games_played: u64     │    PDA: ["leaderboard"]
-│  entries: [Entry; 10]        │    Global singleton
-│  last_updated: i64           │    Updated via Magic Action
-│  leaderboard_bump: u8        │    on settle_game
-└─────────────────────────────┘
-   Entry: player, wins, total_games, accuracy_bps, is_active (43 bytes each)
-```
+| Account | Size | PDA Seeds | Delegation | Notes |
+|---|---|---|---|---|
+| PlayerProfile | 58 bytes | `["profile", player]` | Never delegated | One per player, lives on L1. Tracks lifetime stats and concurrent game limit. |
+| GameState | 446 bytes | `["game", player_a, game_id]` | Public TEE | Delegated to TEE validator. |
+| PlayerBoard | 136 bytes | `["board", game, player]` | Private TEE | Private ACL, owner-only reads inside TEE. |
+| SessionAuthority | 113 bytes | `["session", player, session_pubkey]` | Never delegated | One per player per game session. Expires after MAX_SESSION_DURATION (3600s). |
+| Leaderboard | 455 bytes | `["leaderboard"]` | Never delegated | Global singleton. Updated via Magic Action on settle_game. |
+
+Field details:
+- Grid values: 0=empty, 1=ship, 2=hit_ship, 3=miss_water
+- Ship: start_row, start_col, size, horizontal, hits
+- LeaderboardEntry: player, wins, total_games, accuracy_bps, is_active (43 bytes each)
 
 ## Privacy Architecture
 
+```mermaid
+graph TD
+    subgraph TEEBox["TEE Validator - Intel TDX"]
+        TEEID["FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA"]
+        BA["PlayerBoard A<br/>ACL: A only<br/>grid, ships"]
+        BB["PlayerBoard B<br/>ACL: B only<br/>grid, ships"]
+        FIRE["fire reads both atomically in TEE"]
+        GS["GameState<br/>ACL: public<br/>board_a_hits, board_b_hits"]
+        BA --> FIRE
+        BB --> FIRE
+        FIRE --> GS
+    end
+    GS -->|"Public data flows to L1<br/>hit/miss results"| L1["Solana L1"]
 ```
-                    ┌──────────────────────────────────────────┐
-                    │           TEE Validator (Intel TDX)       │
-                    │  FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs   │
-                    │                                          │
-                    │  ┌──────────────┐  ┌──────────────┐     │
-                    │  │ PlayerBoard A │  │ PlayerBoard B │     │
-                    │  │ ACL: A only   │  │ ACL: B only   │     │
-                    │  │ grid, ships   │  │ grid, ships   │     │
-                    │  └──────┬───────┘  └───────┬──────┘     │
-                    │         │                   │            │
-                    │         └─────────┬─────────┘            │
-                    │                   │                       │
-                    │           fire() reads both              │
-                    │           atomically in TEE              │
-                    │                   │                       │
-                    │                   v                       │
-                    │         ┌──────────────────┐             │
-                    │         │   GameState       │             │
-                    │         │   ACL: public     │             │
-                    │         │   board_a_hits    │             │
-                    │         │   board_b_hits    │             │
-                    │         └──────────────────┘             │
-                    └──────────────────────────────────────────┘
-                                        │
-                    Public data flows    │    Private data stays
-                    down to L1           │    inside TEE until
-                    (hit/miss results)   │    settle_game reveals
-                                        v
 
-  Player A's view:                          Player B's view:
-  - Own board: sees ships                   - Own board: sees ships
-  - Opponent hits: public                   - Opponent hits: public
-  - Opponent ships: HIDDEN                  - Opponent ships: HIDDEN
+**Data visibility by role:**
 
-  Validator's view:
-  - GameState: public (hits, status, turns)
-  - PlayerBoard A: HIDDEN (private ACL)
-  - PlayerBoard B: HIDDEN (private ACL)
+| Data | Owner | Opponent | Validator | Public after settle |
+|---|---|---|---|---|
+| Ship positions | Yes | No | No (TEE only) | Yes |
+| Hit/miss results | Yes | Yes | Yes (public GameState) | Yes |
+| Board hash | Yes | Yes | Yes | Yes |
+| Salt | Yes (local) | No | No | No |
 
-  Post-game:
-  - settle_game commits boards to L1
-  - All data becomes public
-  - verify_board proves hash integrity
-```
+**Post-game:** settle_game commits boards to L1, all data becomes public, verify_board proves hash integrity.
 
 Three layers of privacy protection:
 
@@ -268,236 +230,169 @@ Three layers of privacy protection:
 
 ## Commit-Reveal Verification Flow
 
-```
-    BEFORE GAME                     DURING GAME                    AFTER GAME
-    (Client)                        (TEE)                          (Base Layer)
-
- 1. Generate salt                3. place_ships writes          5. Boards committed
-    (32 random bytes)               ships to private               to L1 by
-                                    PlayerBoard inside             settle_game
- 2. board_hash =                    TEE
-    SHA256(ships || salt)                                       6. Anyone calls
-                                 4. fire reads boards              verify_board(
-    Hash committed to               atomically in                  placements, salt)
-    GameState on L1                 same TEE context
-    (create_game or                                             7. Recompute:
-     join_game)                                                    SHA256(placements
-                                                                   || salt)
-
-                                                                8. Compare to
-                                                                   stored hash
-                                                                   on GameState
-
-                                                                9. Match = VALID
-                                                                   Mismatch =
-                                                                   BoardTampered
-                                                                   (error 6022)
+```mermaid
+graph LR
+    subgraph Before["Before Game - Client"]
+        S1["1. Generate salt<br/>32 random bytes"]
+        S2["2. board_hash =<br/>SHA256 of ships + salt"]
+        S3["Hash committed to<br/>GameState on L1<br/>via create_game or join_game"]
+        S1 --> S2 --> S3
+    end
+    subgraph During["During Game - TEE"]
+        S4["3. place_ships writes ships<br/>to private PlayerBoard<br/>inside TEE"]
+        S5["4. fire reads boards<br/>atomically in<br/>same TEE context"]
+        S4 --> S5
+    end
+    subgraph After["After Game - Base Layer"]
+        S6["5. Boards committed<br/>to L1 by settle_game"]
+        S7["6. Anyone calls<br/>verify_board with<br/>placements and salt"]
+        S8["7. Recompute SHA256<br/>of placements + salt"]
+        S9["8. Compare to stored<br/>hash on GameState"]
+        S10{"9. Match?"}
+        VALID["VALID"]
+        TAMPERED["BoardTampered - error 6022"]
+        S6 --> S7 --> S8 --> S9 --> S10
+        S10 -->|"Yes"| VALID
+        S10 -->|"No"| TAMPERED
+    end
+    S3 --> S4
+    S5 --> S6
 ```
 
 ## VRF Turn Order Flow
 
-```
-Player A                    Player B
-    │                           │
-    │  seed_a (32 bytes)        │  seed_b (32 bytes)
-    │  committed at             │  committed at
-    │  create_game              │  join_game
-    │                           │
-    └───────────┬───────────────┘
-                │
-                v
-    combined = seed_a XOR seed_b
-    (neither player controls outcome)
-                │
-                v
-    request_turn_order
-    sends combined seed to VRF Oracle
-    (Queue: Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh)
-                │
-                v
-    VRF Oracle generates
-    randomness: [u8; 32]
-                │
-                v
-    callback_turn_order
-    first = randomness[0] % 2
-                │
-         ┌──────┴──────┐
-         │              │
-    first == 0     first == 1
-         │              │
-    Player A       Player B
-    goes first     goes first
+```mermaid
+graph TD
+    PA["Player A<br/>seed_a 32 bytes<br/>committed at create_game"]
+    PB["Player B<br/>seed_b 32 bytes<br/>committed at join_game"]
+    XOR["combined = seed_a XOR seed_b<br/>neither player controls outcome"]
+    REQ["request_turn_order<br/>sends combined seed to VRF Oracle<br/>Queue: Cuj97ggrh...RUXAxGh"]
+    VRF["VRF Oracle generates<br/>randomness 32 bytes"]
+    CB{"callback_turn_order<br/>first = byte 0 mod 2"}
+    RES_A["Player A goes first"]
+    RES_B["Player B goes first"]
+    PA --> XOR
+    PB --> XOR
+    XOR --> REQ
+    REQ --> VRF
+    VRF --> CB
+    CB -->|"first == 0"| RES_A
+    CB -->|"first == 1"| RES_B
 ```
 
 ## Fire Instruction Flow
 
 The fire instruction does not write to PlayerProfile. Per-shot stats are computed during `update_leaderboard` (Magic Action on settlement).
 
+### Validation
+
+```mermaid
+graph TD
+    START["attacker calls fire row, col"]
+    V1{"status == Playing?"}
+    V2{"attacker is a player?"}
+    V3{"current_turn == attacker?"}
+    V4{"row and col less than 6?"}
+    V5{"target_board.owner == opponent?"}
+    V6{"hits_board at idx == 0?"}
+    E1["GameNotActive 6010"]
+    E2["NotAPlayer 6013"]
+    E3["NotYourTurn 6009"]
+    E4["OutOfBounds 6007"]
+    E5["WrongTarget 6012"]
+    E6["AlreadyFired 6011"]
+    NEXT["Proceed to hit/miss resolution"]
+    START --> V1
+    V1 -->|"No"| E1
+    V1 -->|"Yes"| V2
+    V2 -->|"No"| E2
+    V2 -->|"Yes"| V3
+    V3 -->|"No"| E3
+    V3 -->|"Yes"| V4
+    V4 -->|"No"| E4
+    V4 -->|"Yes"| V5
+    V5 -->|"No"| E5
+    V5 -->|"Yes"| V6
+    V6 -->|"No"| E6
+    V6 -->|"Yes"| NEXT
 ```
-    attacker calls fire(row, col)
-                │
-                v
-    ┌───────────────────────┐
-    │ status == Playing?     │-- No --> GameNotActive (6010)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ attacker is a player?  │-- No --> NotAPlayer (6013)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ current_turn ==        │-- No --> NotYourTurn (6009)
-    │ attacker?              │
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ row < 6 && col < 6?    │-- No --> OutOfBounds (6007)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ target_board.owner ==  │-- No --> WrongTarget (6012)
-    │ opponent?              │
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ hits_board[idx] == 0?  │-- No --> AlreadyFired (6011)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ target_board.grid[idx] │
-    │ == 1 (ship)?           │
-    └───────┬───────┬───────┘
-            │       │
-       Yes (HIT)  No (MISS)
-            │       │
-            v       v
-    hits[idx] = 2   hits[idx] = 1
-    grid[idx] = 2   grid[idx] = 3
-            │       │
-            v       │
-    find ship via   │
-    ship_occupies   │
-    ship.hits += 1  │
-            │       │
-            v       │
-    ┌───────────┐   │
-    │ ship sunk? │   │
-    └───┬───┬───┘   │
-        │   │       │
-       Yes  No      │
-        │   │       │
-        v   └───┬───┘
-    ships_      │
-    remaining   │
-    -= 1        │
-        │       │
-        v       │
-    ┌────────┐  │
-    │ == 0?  │  │
-    └──┬──┬──┘  │
-       │  │     │
-      Yes No    │
-       │  └──┬──┘
-       v     │
-    Finished │
-    winner =  │
-    attacker  │
-              v
-    Switch turn
-    turn_count += 1
-    last_action_ts = now
+
+### Hit/Miss Resolution
+
+```mermaid
+graph TD
+    CHECK{"target_board.grid at idx == 1?"}
+    HIT["HIT<br/>hits at idx = 2<br/>grid at idx = 2"]
+    MISS["MISS<br/>hits at idx = 1<br/>grid at idx = 3"]
+    FIND["find ship via ship_occupies<br/>ship.hits += 1"]
+    SUNK{"ship sunk?<br/>ship.hits == ship.size"}
+    DEC["ships_remaining -= 1"]
+    ZERO{"ships_remaining == 0?"}
+    WIN["Finished<br/>winner = attacker"]
+    SWITCH["Switch turn<br/>turn_count += 1<br/>last_action_ts = now"]
+    CHECK -->|"Yes - ship"| HIT
+    CHECK -->|"No - water"| MISS
+    HIT --> FIND
+    FIND --> SUNK
+    SUNK -->|"Yes"| DEC
+    SUNK -->|"No"| SWITCH
+    DEC --> ZERO
+    ZERO -->|"Yes"| WIN
+    ZERO -->|"No"| SWITCH
+    MISS --> SWITCH
 ```
 
 ## Session Key Flow
 
-```
-Player                      Base Layer                    TEE
-   │                            │                          │
-   │  register_session_key      │                          │
-   │  (bundled in create/join   │                          │
-   │   batch TX, 1 popup)       │                          │
-   │ ────────────────────────-->│                          │
-   │                            │                          │
-   │  Creates SessionAuthority  │                          │
-   │  PDA: ["session",          │                          │
-   │        player,             │                          │
-   │        session_pubkey]     │                          │
-   │  113 bytes                 │                          │
-   │  expires_at = now + 3600   │                          │
-   │                            │                          │
-   │  Session keypair stored    │                          │
-   │  in browser memory         │                          │
-   │                            │                          │
-   │  place_ships (signed by    │                          │
-   │  session key, 0 popups)    │────────────────────────->│
-   │                            │                          │
-   │  fire (signed by           │                          │
-   │  session key, 0 popups)    │────────────────────────->│
-   │                            │                          │
-   │  claim_prize (signed by    │                          │
-   │  session key, winner_wallet│                          │
-   │  set for SOL destination)  │                          │
-   │ ────────────────────────-->│                          │
-   │                            │                          │
-   │  revoke_session_key        │                          │
-   │  (closes PDA, reclaims     │                          │
-   │   rent)                    │                          │
-   │ ────────────────────────-->│                          │
+```mermaid
+sequenceDiagram
+    participant P as Player
+    participant BL as Base Layer
+    participant TEE as TEE
+    Note over P,BL: Bundled in create/join batch TX, 1 popup
+    P->>BL: register_session_key
+    Note right of BL: SessionAuthority PDA created<br/>seeds: session, player, session_pubkey<br/>113 bytes, expires_at = now + 3600
+    Note left of P: Session keypair stored in browser memory
+    P->>TEE: place_ships - session key, 0 popups
+    P->>TEE: fire - session key, 0 popups
+    P->>BL: claim_prize - session key, winner_wallet for SOL destination
+    P->>BL: revoke_session_key - closes PDA, reclaims rent
 ```
 
 Session key preservation: if a transaction fails and is retried, the existing session keypair is reused, not regenerated.
 
 ## Frontend Orchestration (TX Batching)
 
+### Player A Flow
+
+```mermaid
+graph TD
+    subgraph BATCH["Batch TX - 1 popup"]
+        A1["1. ensureProfile<br/>init PlayerProfile if not exists"]
+        A2["2. create_game<br/>GameState + Board A + ACL A<br/>board_hash_a + deposit buy-in"]
+        A3["3. register_session_key<br/>SessionAuthority PDA, 1hr expiry"]
+        A1 --> A2 --> A3
+    end
+    subgraph ORCH["Orchestration - session key, no popups"]
+        A4["delegate_board<br/>A board to TEE"]
+        A5["delegate_game_state<br/>public ACL"]
+        A6["request_turn_order<br/>VRF"]
+        A4 --> A5 --> A6
+    end
+    BATCH --> ORCH
 ```
-PLAYER A FLOW (1 wallet popup for entire game setup):
 
-   ┌────────────────────────────────────────────┐
-   │  Batch TX #1 (1 popup)                      │
-   │                                             │
-   │  1. ensureProfile                           │
-   │     (init PlayerProfile if not exists)      │
-   │                                             │
-   │  2. create_game                             │
-   │     (GameState + Board A + ACL A            │
-   │      + board_hash_a + deposit buy-in)       │
-   │                                             │
-   │  3. register_session_key                    │
-   │     (SessionAuthority PDA, 1hr expiry)      │
-   └─────────────────┬──────────────────────────┘
-                     │
-                     v
-   Orchestration continues with session key:
-   - delegate_board (A's board to TEE)
-   - delegate_game_state (public ACL)
-   - request_turn_order (VRF)
-   (all signed by session key or payer, no popups)
+### Player B Flow
 
-PLAYER B FLOW (1 wallet popup for entire game setup):
-
-   ┌────────────────────────────────────────────┐
-   │  Batch TX #1 (1 popup)                      │
-   │                                             │
-   │  1. ensureProfile                           │
-   │     (init PlayerProfile if not exists)      │
-   │                                             │
-   │  2. join_game                               │
-   │     (Board B + ACL B + board_hash_b         │
-   │      + deposit buy-in)                      │
-   │                                             │
-   │  3. delegate_board                          │
-   │     (B's board to TEE)                      │
-   │                                             │
-   │  4. register_session_key                    │
-   │     (SessionAuthority PDA, 1hr expiry)      │
-   └────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph BATCH2["Batch TX - 1 popup"]
+        B1["1. ensureProfile<br/>init PlayerProfile if not exists"]
+        B2["2. join_game<br/>Board B + ACL B + board_hash_b<br/>deposit buy-in"]
+        B3["3. delegate_board<br/>B board to TEE"]
+        B4["4. register_session_key<br/>SessionAuthority PDA, 1hr expiry"]
+        B1 --> B2 --> B3 --> B4
+    end
 ```
 
 ### Stale Profile Recovery
@@ -506,133 +401,75 @@ Before submitting the batch TX, the frontend checks the player's profile. If `ac
 
 ## Auto End-Game Flow
 
-```
-    Game status == Finished
-    (ships_remaining == 0)
-              │
-              v
-    ┌──────────────────────┐
-    │ endGameStatus: none   │
-    └──────────┬───────────┘
-               │ auto-trigger
-               v
-    ┌──────────────────────┐
-    │ endGameStatus:        │    settle_game on TEE:
-    │ settling              │    - CommitAndUndelegate GameState
-    │                       │    - CommitAndUndelegate Board A
-    │ settle_game()         │    - CommitAndUndelegate Board B
-    │ (TEE transaction)     │    - Magic Action: update_leaderboard
-    └──────────┬───────────┘
-               │
-               v
-    ┌──────────────────────┐
-    │ Poll L1 for           │    Check base layer for committed
-    │ confirmation          │    GameState every few seconds
-    │ (up to 90 seconds)    │
-    └──────────┬───────────┘
-               │ confirmed
-               v
-    ┌──────────────────────┐
-    │ endGameStatus:        │
-    │ settled               │
-    └──────────┬───────────┘
-               │ auto-trigger
-               v
-    ┌──────────────────────┐
-    │ endGameStatus:        │    claim_prize on L1:
-    │ claiming              │    - Session key signs
-    │                       │    - winner_wallet for SOL destination
-    │ claim_prize()         │    - Decrements active_games
-    │ (session key,         │    - Updates profiles
-    │  0 wallet popups)     │
-    └──────────┬───────────┘
-               │
-               v
-    ┌──────────────────────┐
-    │ endGameStatus:        │    Winner receives pot
-    │ claimed               │    (buy_in * 2)
-    └──────────────────────┘
-
-    On any failure:
-    ┌──────────────────────┐
-    │ endGameStatus: error  │    User shown error message
-    │                       │    Manual retry available
-    └──────────────────────┘
+```mermaid
+graph TD
+    START["Game status == Finished<br/>ships_remaining == 0"]
+    NONE["endGameStatus: none"]
+    SETTLING["endGameStatus: settling<br/>settle_game TEE transaction<br/>CommitAndUndelegate GameState + Board A + Board B<br/>Magic Action: update_leaderboard"]
+    POLL["Poll L1 for confirmation<br/>up to 90 seconds"]
+    SETTLED["endGameStatus: settled"]
+    CLAIMING["endGameStatus: claiming<br/>claim_prize on L1, session key signs<br/>winner_wallet for SOL, 0 wallet popups<br/>Decrements active_games, updates profiles"]
+    CLAIMED["endGameStatus: claimed<br/>Winner receives pot"]
+    ERROR["endGameStatus: error<br/>Manual retry available"]
+    START --> NONE
+    NONE -->|"auto-trigger"| SETTLING
+    SETTLING --> POLL
+    POLL -->|"confirmed"| SETTLED
+    SETTLED -->|"auto-trigger"| CLAIMING
+    CLAIMING --> CLAIMED
+    SETTLING -.->|"failure"| ERROR
+    POLL -.->|"timeout"| ERROR
+    CLAIMING -.->|"failure"| ERROR
 ```
 
 The endGameStatus values: `none`, `settling`, `settled`, `claiming`, `claimed`, `error`.
 
 ## Timeout Logic Flow
 
-```
-    claim_timeout(claimer)
-              │
-              v
-    ┌───────────────────────┐
-    │ claimer is a player?   │-- No --> NotAPlayer (6013)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ elapsed > 300s?        │-- No --> NotTimedOut (6019)
-    │ (TIMEOUT_SECONDS)      │
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────────────────────┐
-    │            status?                     │
-    └───┬──────────┬──────────────┬─────────┘
-        │          │              │
-   Waiting     Placing        Playing
-        │          │              │
-        v          v              v
-   Cancelled    TimedOut     Determine winner:
-   Refund A     Refund both  timed_out = current_turn
-   (buy-in)     (buy-in      winner = other player
-                 each)        claimer must == winner
-                              │
-                              v
-                           TimedOut
-                           winner set
-                           has_winner = true
-                           (claim pot via claim_prize)
+```mermaid
+graph TD
+    START["claim_timeout claimer"]
+    V1{"claimer is a player?"}
+    E1["NotAPlayer 6013"]
+    V2{"elapsed > 300s?<br/>TIMEOUT_SECONDS"}
+    E2["NotTimedOut 6019"]
+    V3{"status?"}
+    WAIT["Cancelled<br/>Refund A buy-in"]
+    PLACE["TimedOut<br/>Refund both buy-in each"]
+    PLAY["Determine winner<br/>timed_out = current_turn<br/>winner = other player<br/>claimer must == winner"]
+    RESULT["TimedOut<br/>winner set, has_winner = true<br/>claim pot via claim_prize"]
+    START --> V1
+    V1 -->|"No"| E1
+    V1 -->|"Yes"| V2
+    V2 -->|"No"| E2
+    V2 -->|"Yes"| V3
+    V3 -->|"WaitingForPlayer"| WAIT
+    V3 -->|"Placing"| PLACE
+    V3 -->|"Playing"| PLAY
+    PLAY --> RESULT
 ```
 
 ## Settlement Flow
 
 settle_game commits GameState and both boards to L1 via CommitAndUndelegate. No permission CPIs. ACLs only matter within the TEE execution context. Once committed to L1, data is inherently public.
 
-```
-    settle_game (called on TEE)
-              │
-              v
-    ┌───────────────────────┐
-    │ status == Finished?    │-- No --> GameNotFinished (6014)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌───────────────────────┐
-    │ caller is a player?    │-- No --> NotAPlayer (6013)
-    └───────────┬───────────┘
-                │ Yes
-                v
-    ┌────────────────────────────────────────────┐
-    │  CommitAndUndelegate GameState              │
-    │  (with Magic Action handler:               │
-    │   update_leaderboard on base layer)        │
-    └────────────────────┬───────────────────────┘
-                         │
-                         v
-    ┌────────────────────────────────────────────┐
-    │  CommitAndUndelegate Board A                │
-    │  (board data written to L1)                 │
-    └────────────────────┬───────────────────────┘
-                         │
-                         v
-    ┌────────────────────────────────────────────┐
-    │  CommitAndUndelegate Board B                │
-    │  (board data written to L1)                 │
-    └────────────────────────────────────────────┘
+```mermaid
+graph TD
+    START["settle_game called on TEE"]
+    V1{"status == Finished?"}
+    E1["GameNotFinished 6014"]
+    V2{"caller is a player?"}
+    E2["NotAPlayer 6013"]
+    C1["CommitAndUndelegate GameState<br/>with Magic Action handler:<br/>update_leaderboard on base layer"]
+    C2["CommitAndUndelegate Board A<br/>board data written to L1"]
+    C3["CommitAndUndelegate Board B<br/>board data written to L1"]
+    START --> V1
+    V1 -->|"No"| E1
+    V1 -->|"Yes"| V2
+    V2 -->|"No"| E2
+    V2 -->|"Yes"| C1
+    C1 --> C2
+    C2 --> C3
 ```
 
 ## CPI Call Map
