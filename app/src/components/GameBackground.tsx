@@ -1,6 +1,34 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { getSfx } from "@/lib/sfx";
+
+function SfxToggle() {
+  const [sfxOn, setSfxOn] = useState(() => getSfx().enabled);
+  return (
+    <button
+      onClick={() => setSfxOn(getSfx().toggle())}
+      className="p-2.5 rounded-full bg-black/50 hover:bg-black/70 text-white/60 hover:text-white transition-all duration-200 backdrop-blur-sm border border-white/10 hover:border-white/20"
+      aria-label={sfxOn ? "Mute SFX" : "Unmute SFX"}
+      title={sfxOn ? "SFX On" : "SFX Off"}
+    >
+      {sfxOn ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <line x1="12" y1="2" x2="12" y2="6" />
+          <line x1="12" y1="18" x2="12" y2="22" />
+          <line x1="2" y1="12" x2="6" y2="12" />
+          <line x1="18" y1="12" x2="22" y2="12" />
+        </svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <line x1="4" y1="4" x2="20" y2="20" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 export function GameBackground() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -89,27 +117,32 @@ export function GameBackground() {
         aria-hidden="true"
       />
 
-      {/* Audio toggle (bottom-right, above debug button which is bottom-left) */}
-      <button
-        onClick={toggleAudio}
-        className="fixed bottom-4 right-4 z-50 p-2.5 rounded-full bg-black/50 hover:bg-black/70 text-white/60 hover:text-white transition-all duration-200 backdrop-blur-sm border border-white/10 hover:border-white/20"
-        aria-label={isMuted ? "Unmute background audio" : "Mute background audio"}
-        title={isMuted ? "Unmute" : "Mute"}
-      >
-        {isMuted ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 5L6 9H2v6h4l5 4V5z" />
-            <line x1="23" y1="9" x2="17" y2="15" />
-            <line x1="17" y1="9" x2="23" y2="15" />
-          </svg>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 5L6 9H2v6h4l5 4V5z" />
-            <path d="M19.07 4.93a10 10 0 010 14.14" />
-            <path d="M15.54 8.46a5 5 0 010 7.07" />
-          </svg>
-        )}
-      </button>
+      {/* Audio controls (bottom-right, side by side) */}
+      <div className="fixed bottom-4 right-4 z-50 flex gap-2">
+        {/* SFX toggle */}
+        <SfxToggle />
+        {/* Music toggle */}
+        <button
+          onClick={toggleAudio}
+          className="p-2.5 rounded-full bg-black/50 hover:bg-black/70 text-white/60 hover:text-white transition-all duration-200 backdrop-blur-sm border border-white/10 hover:border-white/20"
+          aria-label={isMuted ? "Unmute music" : "Mute music"}
+          title={isMuted ? "Music Off" : "Music On"}
+        >
+          {isMuted ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <line x1="23" y1="9" x2="17" y2="15" />
+              <line x1="17" y1="9" x2="23" y2="15" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <path d="M19.07 4.93a10 10 0 010 14.14" />
+              <path d="M15.54 8.46a5 5 0 010 7.07" />
+            </svg>
+          )}
+        </button>
+      </div>
     </>
   );
 }

@@ -60,6 +60,9 @@ interface PlacementPhaseProps {
   onRetrySetup?: () => void;
   timeoutDeadline?: number | null;
   onClaimTimeout?: () => void;
+  onBack?: () => void;
+  canCancel?: boolean;
+  setupInProgress?: boolean;
 }
 
 function canPlace(
@@ -78,7 +81,7 @@ function canPlace(
   return true;
 }
 
-export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, onRetrySetup, timeoutDeadline, onClaimTimeout }: PlacementPhaseProps) {
+export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, onRetrySetup, timeoutDeadline, onClaimTimeout, onBack, canCancel, setupInProgress }: PlacementPhaseProps) {
   const [ships, setShips] = useState<ShipToPlace[]>(
     SHIP_SIZES.map((size) => ({
       size,
@@ -169,8 +172,57 @@ export function PlacementPhase({ onConfirm, confirmed, setupStatus, setupError, 
     );
   };
 
+  const [showBackModal, setShowBackModal] = useState(false);
+
   return (
     <div className="min-h-[calc(100vh-56px)] flex flex-col items-center justify-center gap-8 px-8 py-8">
+      {/* Back to lobby button */}
+      {onBack && !setupInProgress && (
+        <button
+          onClick={() => setShowBackModal(true)}
+          className="btn-ghost self-start -mb-4 text-xs flex items-center gap-1.5"
+          style={{ padding: "6px 14px" }}
+        >
+          <span className="text-sm">&larr;</span> BACK TO LOBBY
+        </button>
+      )}
+
+      {/* Confirm back modal */}
+      {showBackModal && onBack && (
+        <div
+          className="fixed inset-0 flex items-center justify-center bg-black/50"
+          style={{ zIndex: 100 }}
+          onClick={() => setShowBackModal(false)}
+        >
+          <div
+            className="glass-panel-strong p-8 max-w-sm w-full mx-4 text-center space-y-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-white text-sm font-mono leading-relaxed">
+              {canCancel
+                ? "Cancel this game? Your buy-in will be refunded."
+                : "Leave this game? Your opponent can claim your buy-in after the timeout (5 min)."}
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => { setShowBackModal(false); onBack(); }}
+                className="btn-primary text-xs"
+                style={{ padding: "10px 24px" }}
+              >
+                CONFIRM
+              </button>
+              <button
+                onClick={() => setShowBackModal(false)}
+                className="btn-ghost text-xs"
+                style={{ padding: "10px 24px" }}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div>
         <p className="text-game-label text-center mb-1">
           Deployment Phase

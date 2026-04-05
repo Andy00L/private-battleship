@@ -5,6 +5,50 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
 import { getSolPriceUsd, formatBuyInDisplay } from "@/lib/oracle";
 
+function InfoTooltip() {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block ml-2">
+      <button
+        onClick={() => setOpen(!open)}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-cyan-500/30 text-cyan-400/60 text-[9px] font-bold hover:bg-cyan-500/10 hover:text-cyan-300 transition-all cursor-pointer"
+        style={{ textShadow: "none", lineHeight: 1 }}
+        aria-label="More info about private games"
+      >
+        i
+      </button>
+      {open && (
+        <div
+          className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-4 rounded-xl text-sm leading-relaxed"
+          style={{
+            background: "rgba(10, 20, 40, 0.92)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            border: "1px solid rgba(100, 180, 255, 0.15)",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)",
+            color: "rgba(255,255,255,0.85)",
+            textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+          }}
+        >
+          <p className="font-semibold text-cyan-300 mb-2 text-xs">Private Game</p>
+          <p className="mb-2 text-xs">
+            Paste your opponent&apos;s Solana wallet address. Only that wallet
+            will be able to join this game.
+          </p>
+          <p className="text-white/40 text-[10px]">
+            Leave empty to create an open game anyone can join.
+          </p>
+          <div
+            className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent"
+            style={{ borderTopColor: "rgba(10, 20, 40, 0.92)" }}
+          />
+        </div>
+      )}
+    </span>
+  );
+}
+
 const WalletMultiButton = dynamic(
   () =>
     import("@solana/wallet-adapter-react-ui").then(
@@ -83,8 +127,9 @@ export function GameLobby({
           </div>
 
           <div className="border-t border-slate-700/20 pt-4">
-            <label className="text-xs font-mono tracking-wider text-slate-500 uppercase block mb-2">
+            <label className="text-xs font-mono tracking-wider text-slate-500 uppercase mb-2 flex items-center">
               Invite Player (optional)
+              <InfoTooltip />
             </label>
             <input
               type="text"

@@ -84,6 +84,9 @@ export default function Home() {
             onRetrySetup={game.retrySetup}
             timeoutDeadline={game.timeoutDeadline}
             onClaimTimeout={game.claimTimeout}
+            onBack={game.cancelGame}
+            canCancel={game.playerRole === "a" && (!game.gameState || game.gameState.status === 0)}
+            setupInProgress={game.setupInProgress}
           />
         )}
 

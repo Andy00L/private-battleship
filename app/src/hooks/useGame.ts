@@ -13,6 +13,7 @@ import {
 import { BN } from "@coral-xyz/anchor";
 import { TeeConnectionManager } from "@/lib/tee-connection";
 import { generateBoardHash } from "@/lib/board-hash";
+import { getSfx } from "@/lib/sfx";
 import { debugLog } from "@/lib/debug-logger";
 import {
   PROGRAM_ID,
@@ -654,6 +655,25 @@ export function useGame() {
           );
           const gs = parseGameState(decoded);
           debugLog.log("SUB", `TEE game update: status=${STATUS_NAMES[gs.status]} turn=${pk(gs.currentTurn)} turnCount=${gs.turnCount} shipsA=${gs.shipsRemainingA} shipsB=${gs.shipsRemainingB}`);
+
+          // Detect enemy shot (turn switched TO me = opponent just fired at my board)
+          const prev = gameStateRef.current;
+          if (prev && publicKey && gs.currentTurn.equals(publicKey) && !prev.currentTurn.equals(publicKey) && gs.status === GameStatus.Playing) {
+            const isA = gs.playerA.equals(publicKey);
+            const myShipsNow = isA ? gs.shipsRemainingA : gs.shipsRemainingB;
+            const myShipsBefore = isA ? prev.shipsRemainingA : prev.shipsRemainingB;
+            if (myShipsNow < myShipsBefore) {
+              getSfx().play("enemy_sunk");
+            } else {
+              // Check hit boards for new entries on my board
+              const myHitsNow = isA ? gs.boardAHits : gs.boardBHits;
+              const myHitsBefore = isA ? prev.boardAHits : prev.boardBHits;
+              const newHit = myHitsNow.some((v: number, i: number) => v === 2 && myHitsBefore[i] === 0);
+              if (newHit) getSfx().play("enemy_hit");
+              else getSfx().play("enemy_miss");
+            }
+          }
+
           setGameState(gs);
 
           // Auto end-game: settle → wait for L1 → auto-claim
@@ -1734,6 +1754,10 @@ export function useGame() {
         addTxLog(sig, `fire(${row},${col})`, latency, result);
         if (result) {
           setRecentShots(prev => [{ row, col, result, timestamp: Date.now() }, ...prev].slice(0, 3));
+          // Play SFX for MY fire result
+          if (result === "sunk") getSfx().play("my_sunk");
+          else if (result === "hit") getSfx().play("my_hit");
+          else if (result === "miss") getSfx().play("my_miss");
         }
         setGameState(updated);
       } catch (e) {
@@ -1980,5 +2004,37 @@ export function useGame() {
     claimPrize,
     verifyBoard,
     newGame: resetForNewGame,
+    cancelGame: useCallback(async () => {
+      const pda = gamePdaRef.current;
+      if (!publicKey || !pda) return;
+      const role = playerRoleRef.current;
+      const gs = gameStateRef.current;
+
+      // Only Player A can cancel, and only in WaitingForPlayer status
+      if (role === "a" && gs && gs.status === 0 /* WaitingForPlayer */) {
+        try {
+          debugLog.log("TX", "cancel_game SENDING", { game: pda });
+          const program = baseProgram();
+          const [profilePda] = getProfilePda(publicKey);
+          const start = Date.now();
+          const sig = await program.methods
+            .cancelGame()
+            .accounts({
+              playerA: publicKey,
+              game: pda,
+              playerProfile: profilePda,
+            })
+            .rpc();
+          debugLog.log("TX", `cancel_game SUCCESS sig=${sig} latency=${Date.now() - start}ms`);
+          addTxLog(sig, "cancel_game", Date.now() - start);
+        } catch (e) {
+          debugLog.error("cancel_game failed (non-fatal, resetting locally)", e);
+        }
+      }
+
+      resetForNewGame();
+    }, [publicKey, addTxLog, connection, signTransaction, signAllTransactions]),
+    playerRole: playerRoleRef.current,
+    setupInProgress: !!setupStatus && !setupError,
   };
 }
