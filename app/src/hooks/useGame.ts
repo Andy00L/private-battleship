@@ -1866,38 +1866,46 @@ export function useGame() {
     debugLog.log("USER", "verifyBoard");
     const start = Date.now();
 
-    try {
-      const program = baseProgram();
-      const placements = storedPlacementsRef.current.map((p) => ({
-        startRow: p.startRow,
-        startCol: p.startCol,
-        size: p.size,
-        horizontal: p.horizontal,
-      }));
+    const placements = storedPlacementsRef.current.map((p) => ({
+      startRow: p.startRow,
+      startCol: p.startCol,
+      size: p.size,
+      horizontal: p.horizontal,
+    }));
 
-      debugLog.log("TX", "verify_board SENDING", { verifier: publicKey, game: gamePda, program: "base" });
-      const sig = await program.methods
-        .verifyBoard(placements, Array.from(boardSalt))
-        .accounts({
-          verifier: publicKey,
-          game: gamePda,
-          boardOwner: publicKey,
-        })
-        .rpc();
-
-      debugLog.log("TX", `verify_board SUCCESS sig=${sig} latency=${Date.now() - start}ms`);
-      addTxLog(sig, "verify_board", Date.now() - start);
-
+    // Retry once on "Blockhash not found" (devnet RPC lag)
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        sessionStorage.removeItem(`battleship:${gamePda.toBase58()}`);
-        debugLog.log("SESSION", `removed commit-reveal for ${pk(gamePda)}`);
-      } catch {
-        // non-fatal
+        const program = baseProgram();
+        debugLog.log("TX", `verify_board SENDING (attempt ${attempt + 1})`, { verifier: publicKey, game: gamePda });
+        const sig = await program.methods
+          .verifyBoard(placements, Array.from(boardSalt))
+          .accounts({
+            verifier: publicKey,
+            game: gamePda,
+            boardOwner: publicKey,
+          })
+          .rpc();
+
+        debugLog.log("TX", `verify_board SUCCESS sig=${sig} latency=${Date.now() - start}ms`);
+        addTxLog(sig, "verify_board", Date.now() - start);
+
+        try {
+          sessionStorage.removeItem(`battleship:${gamePda.toBase58()}`);
+          debugLog.log("SESSION", `removed commit-reveal for ${pk(gamePda)}`);
+        } catch { /* non-fatal */ }
+        return;
+      } catch (e) {
+        if (String(e).includes("Blockhash not found") && attempt === 0) {
+          debugLog.log("TX", "verify_board: Blockhash not found, retrying in 2s");
+          await sleep(2000);
+          continue;
+        }
+        console.error("verifyBoard failed:", e);
+        debugLog.error("verifyBoard FAILED", e);
+        addTxLog("failed", "verify_board", Date.now() - start);
+        return;
       }
-    } catch (e) {
-      console.error("verifyBoard failed:", e);
-      debugLog.error("verifyBoard FAILED", e);
-      addTxLog("failed", "verify_board", Date.now() - start);
     }
   }, [publicKey, gamePda, boardSalt, addTxLog, connection, signTransaction, signAllTransactions]);
 

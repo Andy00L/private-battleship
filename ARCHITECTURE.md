@@ -12,7 +12,7 @@ The program runs across two execution contexts: Solana L1 (base layer) and Magic
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                           FRONTEND (Next.js 16.2.2)                          │
 │                                                                              │
-│  useGame.ts (2032 lines)                                                     │
+│  useGame.ts (2040 lines)                                                     │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │  GameLobby   │  │  Placement   │  │   Battle     │  │   Result     │     │
 │  │  create/join │  │  place_ships │  │   fire       │  │  settle/claim│     │
@@ -66,7 +66,7 @@ solana-blitz-v3/
 │       │   ├── TransactionLog.tsx   #  69 lines
 │       │   └── wallet-provider.tsx  #  36 lines
 │       ├── hooks/
-│       │   └── useGame.ts           # 2032 lines
+│       │   └── useGame.ts           # 2040 lines
 │       └── lib/                     # 6 utility modules
 │           ├── program.ts           # 126 lines
 │           ├── tee-connection.ts    # 105 lines
@@ -80,7 +80,7 @@ solana-blitz-v3/
 └── rust-toolchain.toml              # Rust 1.89.0
 ```
 
-Total frontend: 4325 lines across all files.
+Total frontend: 4334 lines across all files.
 
 ## Game Lifecycle Sequence Diagram
 
@@ -691,7 +691,7 @@ The Pricing Oracle displays SOL/USD equivalent in the game lobby. The contract d
 
 ### Single hook architecture
 
-All game state, subscriptions, and transaction logic lives in `useGame.ts` (2032 lines). Components are pure rendering. This keeps data flow unidirectional and makes it straightforward to reason about state transitions.
+All game state, subscriptions, and transaction logic lives in `useGame.ts` (2040 lines). Components are pure rendering. This keeps data flow unidirectional and makes it straightforward to reason about state transitions.
 
 ### TX batching for minimal popups
 

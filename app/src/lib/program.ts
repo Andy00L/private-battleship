@@ -121,6 +121,7 @@ export interface AnchorWallet {
 export function getProgram(conn: Connection, wallet: AnchorWallet): any {
   const provider = new AnchorProvider(conn, wallet as any, {
     commitment: "confirmed",
+    preflightCommitment: "confirmed",
   });
   return new Program(idlJson as any, provider);
 }
