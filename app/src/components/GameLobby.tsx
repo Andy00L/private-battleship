@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useConnection } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
 import { getSolPriceUsd, formatBuyInDisplay } from "@/lib/oracle";
 
@@ -68,15 +67,14 @@ export function GameLobby({
   onCreateGame,
   onJoinGame,
 }: GameLobbyProps) {
-  const { connection } = useConnection();
   const [buyInSol, setBuyInSol] = useState("0.01");
   const [invitedPlayer, setInvitedPlayer] = useState("");
   const [joinAddress, setJoinAddress] = useState("");
   const [solPriceUsd, setSolPriceUsd] = useState(0);
 
   useEffect(() => {
-    getSolPriceUsd(connection).then(setSolPriceUsd);
-  }, [connection]);
+    getSolPriceUsd().then(setSolPriceUsd);
+  }, []);
 
   const buyInLamports = Math.round(
     parseFloat(buyInSol || "0") * 1_000_000_000,

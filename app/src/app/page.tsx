@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import dynamic from "next/dynamic";
 import { useGame } from "@/hooks/useGame";
+import { getSolPriceUsd } from "@/lib/oracle";
 import { GameLobby } from "@/components/GameLobby";
 import { HeroVideo } from "@/components/HeroVideo";
 import { PlacementPhase } from "@/components/PlacementPhase";
@@ -23,6 +24,11 @@ export default function Home() {
   const { publicKey } = useWallet();
   const game = useGame();
   const [copied, setCopied] = useState(false);
+  const [solPriceUsd, setSolPriceUsd] = useState(0);
+
+  useEffect(() => {
+    getSolPriceUsd().then(setSolPriceUsd);
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -119,7 +125,7 @@ export default function Home() {
                 : "None"
             }
             potLamports={game.gameState?.potLamports ?? 0}
-            solPriceUsd={0}
+            solPriceUsd={solPriceUsd}
             onClaimPrize={game.claimPrize}
             onVerifyBoard={game.verifyBoard}
             onNewGame={game.newGame}

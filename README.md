@@ -70,7 +70,7 @@ At settlement, `settle_game` builds a `CallHandler` with `ShortAccountMeta` entr
 
 ### 5. Pricing Oracle
 
-The frontend reads the SOL/USD price for buy-in display via `getSolPriceUsd()`. The contract only deals in lamports (no price-drift vulnerability). Currently stubbed (`oracle.ts` returns 0) pending Oracle account format integration.
+The frontend reads the SOL/USD price from MagicBlock's real-time pricing oracle at `ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu` on the TEE devnet. The oracle uses Pyth-compatible PriceUpdateV2 format. The price is cached for 30 seconds and displayed as a USD equivalent next to the SOL buy-in. The contract deals exclusively in lamports (no price-drift vulnerability).
 
 ## Architecture
 
@@ -217,7 +217,6 @@ After `settle_game`, boards are committed to L1. Anyone can call `verify_board` 
 ## Limitations
 
 - Leaderboard holds 10 entries max (no eviction)
-- Oracle stubbed (returns 0)
 - Devnet only
 - Phantom wallet only
 - Settlement takes 30-40s on devnet
