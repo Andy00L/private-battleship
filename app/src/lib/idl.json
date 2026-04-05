@@ -1535,6 +1535,13 @@
           "writable": true
         },
         {
+          "name": "session_authority",
+          "docs": [
+            "Optional session authority for session key signing"
+          ],
+          "optional": true
+        },
+        {
           "name": "magic_program",
           "address": "Magic11111111111111111111111111111111111111"
         },

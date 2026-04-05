@@ -206,37 +206,25 @@ export function BattleGrid({
                   </div>
                 )}
 
-                {/* Multi-cell vertical ship */}
+                {/* Multi-cell vertical ship: rotate the wrapper, img stays simple */}
                 {isMultiCellStart && !shipInfo!.horizontal && (
                   <div
                     className="absolute top-0 left-0 pointer-events-none"
                     style={{
-                      width: `${CELL_REM}rem`,
-                      height: shipSpanRem(shipInfo!.size),
+                      width: shipSpanRem(shipInfo!.size),
+                      height: `${CELL_REM}rem`,
+                      transformOrigin: "0 0",
+                      transform: `translateX(${CELL_REM}rem) rotate(90deg) translateZ(0)`,
+                      willChange: "transform",
+                      backfaceVisibility: "hidden",
                       zIndex: 10,
-                      overflow: "hidden",
                     }}
                   >
-                    {/*
-                     * GPU compositing for clean rotation:
-                     * - will-change: transform promotes to GPU layer
-                     * - backface-visibility: hidden prevents back-face bleed
-                     * - translateZ(0) ensures hardware-accelerated rendering
-                     * These eliminate sub-pixel rounding artifacts at edges.
-                     */}
                     <img
                       src={`/assets/ship-${shipInfo!.size}.svg`}
                       alt=""
                       aria-hidden="true"
-                      className="absolute top-0 left-0 opacity-70 object-cover"
-                      style={{
-                        width: shipSpanRem(shipInfo!.size),
-                        height: `${CELL_REM}rem`,
-                        transformOrigin: "0 0",
-                        transform: `translateX(${CELL_REM}rem) rotate(90deg) translateZ(0)`,
-                        willChange: "transform",
-                        backfaceVisibility: "hidden",
-                      }}
+                      className="w-full h-full object-cover opacity-70"
                     />
                   </div>
                 )}

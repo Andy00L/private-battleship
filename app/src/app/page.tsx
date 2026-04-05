@@ -9,6 +9,7 @@ import { HeroVideo } from "@/components/HeroVideo";
 import { PlacementPhase } from "@/components/PlacementPhase";
 import { BattlePhase } from "@/components/BattlePhase";
 import { ResultPhase } from "@/components/ResultPhase";
+import { GameBackground } from "@/components/GameBackground";
 
 const WalletMultiButton = dynamic(
   () =>
@@ -55,8 +56,11 @@ export default function Home() {
         </div>
       )}
 
-      {/* Main content */}
-      <main className="flex-1">
+      {/* Game background video (placement, battle, result phases) */}
+      {game.phase !== "lobby" && <GameBackground />}
+
+      {/* Main content (text-shadow for readability over video background) */}
+      <main className="flex-1" style={{ textShadow: "0 1px 3px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.4)" }}>
         {game.phase === "lobby" && (
           <div className="relative overflow-hidden">
             <HeroVideo />

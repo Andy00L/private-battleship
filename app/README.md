@@ -2,312 +2,331 @@
 
 [Back to main README](../README.md)
 
-Next.js 16.2.2 frontend for the Private Battleship on-chain game. Dark military command center theme with real-time transaction logging and automated multi-step orchestration.
+Next.js 16.2.2 frontend for the Private Battleship on-chain game. 10 components, 1 hook, 5 utility modules. 3941 lines of TypeScript/React total.
 
 ## Setup
 
 ```bash
 npm install
 npm run dev
-# Open http://localhost:3000
 ```
 
-Build for production:
-
-```bash
-npm run build
-npm start
-```
-
-Requires Node 18+. Connects to Solana devnet and MagicBlock TEE at `https://tee.magicblock.app`.
+Opens at `http://localhost:3000`. Requires a Phantom wallet. Connects to Solana devnet by default.
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_DEBUG_LOG` | `true` (in .env.local) | Enable debug logger and floating download button |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NEXT_PUBLIC_RPC_URL` | No | `clusterApiUrl("devnet")` | Solana RPC endpoint. Validated as URL at startup. |
+| `NEXT_PUBLIC_DEBUG_LOG` | No | disabled | When set (any truthy value), enables categorized debug logger and shows floating download button. |
 
 ## Stack
 
-| Package | Version | Role |
-|---------|---------|------|
-| Next.js | 16.2.2 | App Router framework |
-| React | 19.2.4 | UI library |
-| TypeScript | ^5 | Strict mode |
-| Tailwind CSS | 4 | Styling (via @tailwindcss/postcss) |
-| framer-motion | ^12.38.0 | Cell animations, result banners |
-| @solana/web3.js | ^1.98.4 | Solana RPC |
-| @coral-xyz/anchor | ^0.32.1 | Program client |
-| @magicblock-labs/ephemeral-rollups-sdk | ^0.10.3 | TEE delegation |
-| @solana/wallet-adapter-* | ^0.9.x / ^0.15.x | Phantom wallet (devnet) |
-| @noble/hashes | ^1.8.0 | SHA-256 for commit-reveal |
-| tweetnacl | ^1.0.3 | Signing for TEE auth |
+| Package | Version | Purpose |
+|---|---|---|
+| `next` | 16.2.2 | App Router framework |
+| `react` | 19.2.4 | UI library |
+| `typescript` | ^5 | Type system |
+| `tailwindcss` | 4 | Utility CSS |
+| `@solana/web3.js` | ^1.98.4 | Solana client |
+| `@coral-xyz/anchor` | ^0.32.1 | Program client (IDL, PDA derivation) |
+| `@magicblock-labs/ephemeral-rollups-sdk` | ^0.10.3 | TEE auth, permission PDAs, delegation |
+| `framer-motion` | ^12.38.0 | Animation (grid cells, transitions) |
+| `@noble/hashes` | ^1.8.0 | SHA-256 for board commit-reveal |
+| `tweetnacl` | ^1.0.3 | Ed25519 signing for TEE auth tokens |
 
 ## Component Architecture
 
-```mermaid
-graph TD
-    LAYOUT[layout.tsx] --> PROVIDERS[SolanaProviders]
-    PROVIDERS --> PAGE[page.tsx]
-    LAYOUT --> DEBUG_BTN[DebugLogButton]
-    PAGE --> HERO[HeroVideo]
+```
+  page.tsx (phase router)
+      │
+      ├── GameLobby          (phase: lobby)
+      │   └── HeroVideo
+      │
+      ├── PlacementPhase     (phase: placement)
+      │   ├── BattleGrid     (own board, ship placement mode)
+      │   └── GameBackground
+      │
+      ├── BattlePhase        (phase: battle)
+      │   ├── BattleGrid     (own board, read-only)
+      │   ├── BattleGrid     (opponent board, firing mode)
+      │   ├── TransactionLog
+      │   └── GameBackground
+      │
+      └── ResultPhase        (phase: result)
+          └── GameBackground
 
-    PAGE --> LOBBY[GameLobby]
-    PAGE --> PLACEMENT[PlacementPhase]
-    PAGE --> BATTLE[BattlePhase]
-    PAGE --> RESULT[ResultPhase]
-
-    PLACEMENT --> GRID_PLACE["BattleGrid (placement mode)"]
-    BATTLE --> GRID_MY["BattleGrid (Your Fleet)"]
-    BATTLE --> GRID_OPP["BattleGrid (Enemy Waters)"]
-    BATTLE --> TX_LOG[TransactionLog]
-    RESULT --> GRID_A["BattleGrid (Your Board)"]
-    RESULT --> GRID_B["BattleGrid (Opponent Board)"]
-
-    PAGE -.->|state + actions| HOOK[useGame hook]
-    HOOK -.-> TEE_MGR[TeeConnectionManager]
-    HOOK -.-> HASH[generateBoardHash]
-    HOOK -.-> PROGRAM[program.ts - PDAs + Anchor]
-    HOOK -.-> DBG[debug-logger.ts]
-    LOBBY -.-> ORACLE[oracle.ts - SOL/USD]
+  Floating overlays (always present):
+      ├── wallet-provider.tsx (wraps entire app)
+      └── DebugLogButton.tsx  (conditional on NEXT_PUBLIC_DEBUG_LOG)
 ```
 
 ## Components
 
-| Component | File | Lines | Purpose |
-|-----------|------|-------|---------|
-| `GameLobby` | `GameLobby.tsx` | 139 | Create game (buy-in + optional invite) or join by address |
-| `PlacementPhase` | `PlacementPhase.tsx` | 296 | Click-to-place ships, R to rotate, fleet roster panel |
-| `BattlePhase` | `BattlePhase.tsx` | 147 | Two grids + turn indicator + timeout bar + TX log |
-| `BattleGrid` | `BattleGrid.tsx` | 113 | Reusable 6x6 grid with A-F/1-6 labels, framer-motion animations |
-| `TransactionLog` | `TransactionLog.tsx` | 69 | Color-coded TX entries with latency (max 16 visible) |
-| `ResultPhase` | `ResultPhase.tsx` | 110 | Winner/loser banner, both boards revealed, claim/verify buttons |
-| `HeroVideo` | `HeroVideo.tsx` | 27 | Full-screen looping video background with dark overlay |
-| `DebugLogButton` | `DebugLogButton.tsx` | 23 | Floating bottom-left button, downloads debug log, env-gated |
-| `wallet-provider` | `wallet-provider.tsx` | 24 | ConnectionProvider + WalletProvider + WalletModalProvider (Phantom, devnet) |
+| Component | Lines | Description |
+|---|---|---|
+| `BattleGrid.tsx` | 342 | 6x6 grid renderer. Multi-cell ship SVGs: ship-2.svg spans 2 cells, ship-3.svg spans 3 cells. Horizontal ships use `object-cover`. Vertical ships use `rotate(90deg)` + `translateX` correction + GPU compositing (`will-change: transform`). 3 most recent shots highlighted with CSS-animated borders (orange for hit, cyan for miss, red for sunk) that fade after 5 seconds. Crosshair, hit, and miss SVG icon overlays. |
+| `PlacementPhase.tsx` | 307 | Ship placement interface. Players drag ships onto the 6x6 grid. Click to rotate between horizontal and vertical. Multi-cell SVG preview shows ship shape during placement. Validates no overlap and in-bounds before confirming. |
+| `ResultPhase.tsx` | 164 | End-of-game screen. Drives the auto end-game flow: auto-settle on TEE, poll L1 for confirmation (up to 90s), auto-claim with session key (zero wallet popups for winner). Displays progress for each stage. Tracks `endGameStatus`: none, settling, settled, claiming, claimed, error. |
+| `BattlePhase.tsx` | 159 | Main gameplay screen. Renders two BattleGrid instances (own board read-only, opponent board in firing mode). Shows whose turn it is. Includes TransactionLog sidebar. |
+| `GameLobby.tsx` | 139 | Pre-game lobby. Create game form (set buy-in amount, optional invited player address). Join game form (enter game address). Displays SOL/USD equivalent via Oracle stub. |
+| `GameBackground.tsx` | 115 | Fullscreen background video (`/assets/game-bg.mp4`, 31MB). Active during placement, battle, and result phases. Audio toggle button with localStorage persistence for user preference. Falls back to gradient on load failure. Respects `prefers-reduced-motion` media query. |
+| `TransactionLog.tsx` | 69 | Scrollable sidebar listing on-chain transactions. Each entry shows timestamp, action name, latency in ms, and result (hit/miss/sunk). Color-coded: red for hit, blue for miss, orange+bold for sunk, green for other actions. |
+| `wallet-provider.tsx` | 36 | Wraps the app with Solana wallet adapter context. Configures Phantom wallet. Uses `NEXT_PUBLIC_RPC_URL` if set, otherwise defaults to `clusterApiUrl("devnet")`. |
+| `HeroVideo.tsx` | 27 | Video background for the lobby phase. Separate from GameBackground (different video source, no audio toggle). |
+| `DebugLogButton.tsx` | 23 | Floating button in the bottom corner. Triggers JSON download of all debug logs. Only rendered when `NEXT_PUBLIC_DEBUG_LOG` environment variable is set. |
 
 ## Phase Routing
 
-Phase routing in `page.tsx` is driven by `useGame().phase`:
+The page router in `page.tsx` selects which component to render based on game state from `useGame`.
 
-| Phase | Condition | Component | What Happens |
-|-------|-----------|-----------|--------------|
-| `lobby` | No game, or Cancelled | `GameLobby` | Create or join a game |
-| `placing` | WaitingForPlayer or Placing | `PlacementPhase` | Place ships, orchestration runs in background |
-| `playing` | Playing status | `BattlePhase` | Take turns firing at opponent grid |
-| `finished` | Finished or TimedOut | `ResultPhase` | View boards, claim prize, verify board |
+| Phase | Component | Condition |
+|---|---|---|
+| Lobby | `GameLobby` | No active game, or game not yet joined |
+| Placement | `PlacementPhase` | Game joined, status = Placing, ships not yet placed |
+| Battle | `BattlePhase` | Status = Playing |
+| Result | `ResultPhase` | Status = Finished or TimedOut |
 
-```mermaid
-stateDiagram-v2
-    [*] --> lobby
-    lobby --> placing: createGame() / joinGame()
-    placing --> playing: both ships placed + delegation complete
-    playing --> finished: all ships sunk / timeout
-    finished --> lobby: (new game)
+```
+    Wallet connected
+          │
+          v
+    ┌──────────┐    create/join     ┌───────────────┐
+    │  Lobby   │ ─────────────────> │  Placement    │
+    │ GameLobby│                    │ PlacementPhase│
+    └──────────┘                    └───────┬───────┘
+                                            │ both placed
+                                            v
+                                    ┌───────────────┐
+                                    │    Battle     │
+                                    │ BattlePhase   │
+                                    └───────┬───────┘
+                                            │ winner or timeout
+                                            v
+                                    ┌───────────────┐
+                                    │    Result     │
+                                    │ ResultPhase   │
+                                    └───────────────┘
 ```
 
 ## BattleGrid Cell States
 
-The `getCellState(cell, isOpponent)` function in `BattleGrid.tsx` determines cell appearance:
+The grid is 36 cells (6x6). Each cell has a numeric value that maps to a visual state.
 
-| Cell Value | isOpponent | State | Visual |
-|-----------|------------|-------|--------|
-| 2 | any | hit | red-500 with X mark |
-| 3 | any | miss | sky-900 with dot |
-| 1 | false | ship | slate-600 (your own ship) |
-| 0 or 1 | true | water | dark bg, hover: cyan border + crosshair cursor |
+| Value | Meaning | Own Board Display | Opponent Board Display |
+|---|---|---|---|
+| 0 | Empty/unknown | Water (dark) | Water (dark, clickable crosshair) |
+| 1 | Ship (own) / Miss (opponent hits board) | Ship (gray, ship SVG) | Miss (blue dot) |
+| 2 | Hit ship | Hit (red, explosion) | Hit (red, explosion) |
+| 3 | Miss on water | Miss (blue dot) | Miss (blue dot) |
 
-Grid dimensions: 6x6 (36 cells), 56px per cell, 1.5px gap. Row labels A through F, column labels 1 through 6.
-
-The grid uses `framer-motion` for hover scaling (1.08x) and tap compression (0.92x) on clickable cells. A last-hit animation plays a 0.4s scale pulse on the most recent hit cell.
+Recent shot highlighting (3 most recent shots):
+- Hit: orange animated border, 5s fade
+- Miss: cyan animated border, 5s fade
+- Sunk (ship.hits == ship.size): red animated border, 5s fade
 
 ## useGame Hook
 
-The central state manager for the entire game (1563 lines). Returns phase, game state, grids, and action functions.
+1945 lines. The entire game lifecycle: state management, TEE connection, transaction building, account subscriptions, orchestration, and auto-settlement.
 
 ### State
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `phase` | `"lobby" \| "placing" \| "playing" \| "finished"` | Current UI phase |
-| `gameState` | `GameStateData \| null` | Parsed on-chain game state |
-| `gamePda` | `PublicKey \| null` | Current game address |
-| `myGrid` | `number[]` | Player's own board (36 cells) |
+|---|---|---|
+| `gameAddress` | `PublicKey \| null` | Current game PDA address |
+| `gameState` | `GameState \| null` | Deserialized GameState account |
+| `myBoard` | `number[]` | Own 6x6 grid (36 cells) |
 | `opponentHits` | `number[]` | Hit/miss board for opponent's grid |
-| `isMyTurn` | `boolean` | Whether it's this player's turn |
-| `shipsRemainingMe` | `number` | Player's remaining ships |
-| `shipsRemainingOpponent` | `number` | Opponent's remaining ships |
-| `lastHit` | `{row, col} \| null` | Most recent hit for animation |
-| `txLog` | `TxEntry[]` | Transaction history |
-| `isWinner` | `boolean` | Whether this player won |
-| `prizeClaimed` | `boolean` | Whether prize has been claimed |
-| `boardSalt` | `Uint8Array \| null` | Salt for verify_board |
-| `setupStatus` | `string` | Status message during orchestration |
-| `setupError` | `string \| null` | Error message if orchestration fails |
-| `error` | `string \| null` | Top-level error (balance, validation) |
-| `timeoutDeadline` | `number \| null` | Timestamp when 5-min timeout is claimable |
+| `phase` | `string` | Current UI phase (lobby/placement/battle/result) |
+| `isMyTurn` | `boolean` | Whether it is the connected wallet's turn |
+| `txLog` | `TxEntry[]` | Transaction log entries |
+| `endGameStatus` | `string` | Settlement progress: none/settling/settled/claiming/claimed/error |
+| `sessionKeypair` | `Keypair \| null` | In-memory session key for popup-free signing |
+| `teeConnection` | `Connection \| null` | Authenticated TEE connection |
+| `recentShots` | `Shot[]` | 3 most recent shots for border highlighting |
 
 ### Actions
 
-| Function | What It Does |
-|----------|--------------|
-| `createGame(buyInLamports, invitedPlayer)` | Start a new game. Generates board hash, stores salt. |
-| `joinGame(gameAddress)` | Join an existing game by its PDA address. |
-| `placeShips(placements)` | Place ships on grid. Sends create/join TX, starts orchestration. |
-| `fire(row, col)` | Fire at opponent's grid (TEE transaction, session key or wallet). |
-| `claimPrize()` | Winner claims the pot. |
-| `claimTimeout()` | Claim win by opponent inactivity. |
-| `verifyBoard()` | Post-game hash verification using stored salt. |
-| `retrySetup()` | Re-run orchestration after failure. |
+| Action | Signed By | Description |
+|---|---|---|
+| `createGame(buyIn, invitedPlayer?)` | Wallet (batched) | Batch: ensureProfile + create_game + register_session_key. 1 popup. |
+| `joinGame(gameAddress)` | Wallet (batched) | Batch: ensureProfile + join_game + delegate_board + register_session_key. 1 popup. |
+| `placeShips(placements)` | Session key | Send place_ships to TEE. 0 popups. |
+| `fire(row, col)` | Session key | Send fire to TEE. 0 popups. |
+| `settleGame()` | Session key | Send settle_game to TEE. Auto-triggered on Finished. |
+| `claimPrize()` | Session key | Send claim_prize to L1. winner_wallet set for SOL destination. Auto-triggered after settlement confirmed. |
+| `cancelGame()` | Wallet | Cancel before opponent joins. |
+| `claimTimeout()` | Wallet | Claim win or refund on opponent inactivity (300s). |
 
-### Orchestration Engine
+### Orchestration Flow (with TX Batching)
 
-After `placeShips()` sends the create/join transaction, the hook automatically runs through a multi-step setup:
+```
+    Player A calls createGame():
+    ┌─────────────────────────────────────────┐
+    │ 1. Check profile (active_games < 3?)    │
+    │    If stale: autoClaimTimeouts           │
+    │    If 0 games found: reset_active_games  │
+    │                                          │
+    │ 2. Generate board hash:                  │
+    │    salt = random 32 bytes                │
+    │    hash = SHA256(ships || salt)           │
+    │    Store salt in memory                  │
+    │                                          │
+    │ 3. Generate session keypair              │
+    │    (preserved on retry, not regenerated) │
+    │                                          │
+    │ 4. Build batch TX:                       │
+    │    - ensureProfile (idempotent)          │
+    │    - create_game(buyIn, invite,          │
+    │      seed_a, board_hash_a)               │
+    │    - register_session_key                │
+    │                                          │
+    │ 5. Send TX (1 wallet popup)              │
+    └─────────────────┬───────────────────────┘
+                      │
+                      v
+    Orchestration (session key, no popups):
+    - delegate_board (A's board)
+    - Wait for Player B to join + delegate
+    - delegate_game_state (after boards_delegated == 2)
+    - request_turn_order (VRF)
+    - Wait for callback_turn_order
 
-```mermaid
-flowchart TD
-    START[placeShips called] --> PROFILE[Step 0: ensureProfile + assertBalance]
-    PROFILE --> TX[Step 1: Send create_game or join_game TX]
-    TX --> SUB_BASE[Step 2: Subscribe to GameState on base layer]
-    SUB_BASE --> WAIT_PLACING{status == Placing?}
-    WAIT_PLACING -->|Yes| DEL_BOARD[Step 3: delegate_board for my board]
-    DEL_BOARD --> WAIT_BOARDS{boards_delegated >= 2?}
-    WAIT_BOARDS -->|Yes| VRF_REQ[Step 5: request_turn_order]
-    VRF_REQ --> WAIT_TURN{current_turn set?}
-    WAIT_TURN -->|Yes| DEL_GS[Step 6: delegate_game_state]
-    DEL_GS --> INIT_TEE[Step 7: Initialize TeeConnectionManager]
-    INIT_TEE --> SESSION[Step 7b: register_session_key]
-    SESSION --> SWITCH_SUB[Switch subscription: base to TEE]
-    SWITCH_SUB --> PLACE_TEE[Step 8: place_ships on TEE]
-    PLACE_TEE --> DONE[Orchestration complete]
+    Player B calls joinGame():
+    ┌─────────────────────────────────────────┐
+    │ Same profile check + hash generation     │
+    │                                          │
+    │ Build batch TX:                          │
+    │ - ensureProfile                          │
+    │ - join_game(seed_b, board_hash_b)        │
+    │ - delegate_board (B's board)             │
+    │ - register_session_key                   │
+    │                                          │
+    │ Send TX (1 wallet popup)                 │
+    └─────────────────────────────────────────┘
 ```
 
-Each step retries on transient network errors. Progress is tracked with refs (not React state) to avoid stale closures in subscription callbacks.
+### Subscriptions
 
-Auto-settlement: when the hook detects `status === Finished`, it automatically calls `settle_game` to commit results and reveal boards.
-
-Auto-timeout recovery: when creating a game triggers `TooManyGames` (error 6020), the hook calls `autoClaimTimeouts()` to scan and claim timeouts on stale games, freeing up active game slots.
-
-### Subscription Management
-
-The hook maintains up to three concurrent subscriptions:
-
-| Subscription | Target | Purpose |
-|-------------|--------|---------|
-| `baseSubRef` | GameState on Solana L1 | Track game creation, joins, delegation progress |
-| `teeSubRef` | GameState on TEE | Track real-time game state during battle |
-| `teeBoardSubRef` | PlayerBoard on TEE | Track own board state (ships, hits) |
-
-Subscriptions switch from L1 to TEE after delegation completes. All subscriptions are cleaned up on component unmount or game reset.
+| Subscription | Source | Purpose |
+|---|---|---|
+| GameState | TEE (WebSocket) | Real-time game status, turns, hits, winner |
+| Own PlayerBoard | TEE (WebSocket, authenticated) | Own grid updates (ship placement confirmation) |
+| GameState (L1) | Solana devnet | Post-settlement confirmation polling |
+| PlayerProfile | Solana devnet | Active games count for stale detection |
 
 ## Utilities
 
-### TeeConnectionManager (`lib/tee-connection.ts`)
+### tee-connection.ts (105 lines)
 
-Manages authenticated WebSocket connections to the MagicBlock TEE.
+TEE auth token management. Handles `verifyTeeRpcIntegrity` and `getAuthToken` from the MagicBlock SDK.
 
-```mermaid
-flowchart LR
-    INIT[init] --> VERIFY["verifyTeeRpcIntegrity(TEE_URL)"]
-    VERIFY --> AUTH["getAuthToken(wallet.signMessage)"]
-    AUTH --> CONN["new Connection(url?token=...)"]
-    CONN --> TIMER["setInterval(refresh, 240s)"]
-    TIMER -->|every 4 min| AUTH
+```
+    Connect to TEE
+          │
+          v
+    ┌─────────────────────┐
+    │ verifyTeeRpcIntegrity│
+    │ (attempt 1 of 3)     │
+    └──────────┬──────────┘
+               │
+          ┌────┴────┐
+          │         │
+       Success    Fail
+          │         │
+          v         v
+    getAuthToken  Retry with backoff
+          │       (attempt 2, then 3)
+          v              │
+    Connection     ┌─────┴─────┐
+    ready          │           │
+                 Success    All 3 fail
+                   │           │
+                   v           v
+             getAuthToken   ┌──────────┐
+                   │        │ Network? │
+                   v        └──┬───┬───┘
+             Connection       │   │
+             ready         devnet  mainnet
+                              │      │
+                              v      v
+                          Proceed  THROW
+                          without  (strict)
+                          attestation
 ```
 
-- Verifies TEE hardware attestation via `verifyTeeRpcIntegrity` before first use
-- Acquires auth token by signing a message with the connected wallet
-- Creates a `Connection` with the token as a URL query parameter (both HTTP and WebSocket)
-- Auto-refreshes every 240 seconds (4 minutes, before the 5-minute expiry)
-- `destroy()` clears the timer and nullifies the connection
+Retry behavior:
+- 3 attempts with exponential backoff
+- Devnet: falls back to unauthenticated connection (proceed without TEE attestation)
+- Mainnet: strict mode, throws on failure
 
-### Board Hash (`lib/board-hash.ts`)
+### board-hash.ts (36 lines)
 
-Generates the SHA-256 commit-reveal hash for ship placements.
+SHA-256 commit-reveal hash generation.
 
-```typescript
-const { hash, salt } = generateBoardHash(placements);
-// hash: 32-byte Uint8Array (SHA-256 of ship_bytes || salt)
-// salt: 32-byte random Uint8Array (store locally for verify_board)
-```
+Input: array of ship placements (5 ships, each with startRow, startCol, size, horizontal).
+Output: `{ hash: Uint8Array(32), salt: Uint8Array(32) }`.
 
-Each ship is serialized as 4 bytes: `[startRow, startCol, size, horizontal ? 1 : 0]`. The 32-byte salt is generated via `crypto.getRandomValues`. The output matches the on-chain `solana_program::hash::Hasher` used in `verify_board`.
+Process:
+1. Generate 32 random bytes as salt
+2. Serialize placements to bytes (4 bytes per ship: row, col, size, horizontal)
+3. Concatenate: `ships_bytes || salt`
+4. Hash with SHA-256
+5. Return hash and salt (salt stored in memory for post-game `verify_board`)
 
-Salt and placements are persisted to `sessionStorage` under key `battleship:{gamePda}` for cross-refresh survival.
+### oracle.ts (25 lines)
 
-### Oracle (`lib/oracle.ts`)
+SOL/USD price stub. Returns a hardcoded or fetched price for display in the game lobby. The on-chain program deals exclusively in lamports. This is display-only.
 
-Frontend-only SOL/USD price display. Two exports:
+### program.ts (126 lines)
 
-| Function | Purpose |
-|----------|---------|
-| `getSolPriceUsd(connection)` | Fetch SOL price from Oracle account. Currently returns 0 (stub). |
-| `formatBuyInDisplay(lamports, solPriceUsd)` | Format as `"0.01 SOL (~$1.80)"` or `"0.01 SOL"` if price unavailable. |
+PDA derivation, program addresses, and Anchor Program factory.
 
-The Oracle price account address is a placeholder (`11111111111111111111111111111111`). USD display will work once the MagicBlock Pricing Oracle account format is integrated.
+| Export | Description |
+|---|---|
+| `PROGRAM_ID` | `9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR` |
+| `DELEGATION_PROGRAM_ID` | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
+| `PERMISSION_PROGRAM_ID` | `ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1` |
+| `VRF_PROGRAM_ID` | `Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz` |
+| `ORACLE_QUEUE` | `Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh` |
+| `MAGIC_PROGRAM_ID` | `Magic11111111111111111111111111111111111111` |
+| `MAGIC_CONTEXT` | `MagicContext1111111111111111111111111111111` |
+| `TEE_VALIDATOR` | `FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA` |
+| `TEE_RPC` | `https://tee.magicblock.app` |
+| `TEE_WS` | `wss://tee.magicblock.app` |
+| `getGamePda(playerA, gameId)` | Derives `["game", playerA, gameId]` |
+| `getBoardPda(game, player)` | Derives `["board", game, player]` |
+| `getProfilePda(player)` | Derives `["profile", player]` |
+| `getLeaderboardPda()` | Derives `["leaderboard"]` |
+| `getSessionPda(player, sessionKey)` | Derives `["session", player, sessionKey]` |
+| `getProgram(connection, wallet)` | Creates Anchor Program instance from IDL |
 
-### Program (`lib/program.ts`)
+### debug-logger.ts (90 lines)
 
-All on-chain addresses, PDA derivation functions, and the Anchor program factory.
+Categorized logging with JSON download. Only active when `NEXT_PUBLIC_DEBUG_LOG` is set.
 
-| Export | Type | Description |
-|--------|------|-------------|
-| `PROGRAM_ID` | `PublicKey` | Battleship program address |
-| `PERMISSION_PROGRAM_ID` | `PublicKey` | MagicBlock Permission Program |
-| `DELEGATION_PROGRAM_ID` | `PublicKey` | MagicBlock Delegation Program |
-| `TEE_VALIDATOR` | `PublicKey` | Devnet TEE validator |
-| `MAGIC_PROGRAM_ID` | `PublicKey` | Magic Program |
-| `MAGIC_CONTEXT_ID` | `PublicKey` | Magic Context |
-| `VRF_PROGRAM_ID` | `PublicKey` | VRF oracle program |
-| `ORACLE_QUEUE` | `PublicKey` | VRF oracle queue |
-| `SLOT_HASHES` | `PublicKey` | Sysvar SlotHashes |
-| `getGamePda(playerA, gameId)` | `[PublicKey, number]` | Seeds: ["game", playerA, gameId_le_8bytes] |
-| `getBoardPda(game, player)` | `[PublicKey, number]` | Seeds: ["board", game, player] |
-| `getProfilePda(player)` | `[PublicKey, number]` | Seeds: ["profile", player] |
-| `getLeaderboardPda()` | `[PublicKey, number]` | Seeds: ["leaderboard"] |
-| `getProgramIdentityPda()` | `[PublicKey, number]` | Seeds: ["identity"] |
-| `getSessionAuthorityPda(game, player)` | `[PublicKey, number]` | Seeds: ["session", game, player] |
-| `getProgram(conn, wallet)` | `Program` | Create Anchor program instance from IDL |
+| Category | Logged Events |
+|---|---|
+| `game` | State transitions, phase changes, game creation/join |
+| `tee` | TEE connection, auth token refresh, attestation results |
+| `tx` | Transaction sends, confirmations, errors, latency |
+| `orchestration` | Batch TX assembly, delegation sequencing, VRF requests |
 
-PDA seeds match the Rust program constants: `"game"`, `"board"`, `"profile"`, `"leaderboard"`, `"identity"`, `"session"`.
-
-### Debug Logger (`lib/debug-logger.ts`)
-
-Categorized logging system with downloadable output. Controlled by `NEXT_PUBLIC_DEBUG_LOG` env var.
-
-| Category | Used For |
-|----------|----------|
-| `TX` | Transaction sends and confirmations |
-| `STATE` | Game state changes |
-| `ORCH` | Orchestration step progress |
-| `SUB` | Subscription events |
-| `RPC` | RPC calls and responses |
-| `WALLET` | Wallet connection events |
-| `TEE` | TEE connection lifecycle |
-| `USER` | User actions (create, join, fire) |
-| `ERROR` | Error details with stack traces |
-| `POLL` | Polling game state |
-| `SESSION` | Session key registration and usage |
-
-Methods: `log(category, message, data?)`, `error(message, err)`, `download()`, `isEnabled()`, `getLogCount()`.
-
-The logger includes a custom JSON replacer that converts `PublicKey` to base58, `BN` to string, `Uint8Array` to `[Uint8Array length=N]`, and `bigint` to string.
+Each log entry includes: timestamp, category, message, and optional data payload. The `DebugLogButton` component triggers a JSON download of all accumulated entries.
 
 ## Theme
 
-Dark naval command center aesthetic.
+Dark military command center aesthetic.
 
-| Element | Value |
-|---------|-------|
-| Background | `#070a0f` |
-| Foreground | `#e2e8f0` |
-| Card bg | `#0f1520` at 80% opacity, backdrop-blur-md |
-| Card border | `slate-700/30` |
-| Grid overlay | 60px repeating pattern at 4% opacity |
-| Body font | DM Sans |
-| Mono font | IBM Plex Mono (headers, data, TX log) |
-| Scrollbar | 6px thin, slate-700/30 |
-
-Wallet adapter button styles are overridden in `globals.css` to match the dark theme.
+| Element | Style |
+|---|---|
+| Background | Near-black with fullscreen video (game phases) or hero video (lobby) |
+| Grid cells | Semi-transparent with colored borders. Water: dark slate. Ship: gray. Hit: red glow. Miss: blue tint. |
+| Text | Monospace for TX log and coordinates. Sans-serif for UI elements. |
+| Accent colors | Cyan (interactive), red (hits/danger), orange (sunk ships), green (success) |
+| Recent shots | CSS-animated borders with 5s fade: orange (hit), cyan (miss), red (sunk) |
+| Ship SVGs | Multi-cell: ship-1.svg (1 cell), ship-2.svg (2 cells), ship-3.svg (3 cells) |
+| Audio | Background video audio with toggle. Preference saved to localStorage. |
+| Motion | Respects `prefers-reduced-motion`. Framer Motion for grid cell interactions. |
 
 [Back to main README](../README.md)

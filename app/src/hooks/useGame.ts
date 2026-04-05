@@ -71,11 +71,17 @@ const GAME_STATE_DISCRIMINATOR = Buffer.from([144, 94, 208, 172, 248, 99, 134, 1
 
 function hasErrorCode(e: unknown, code: number): boolean {
   const s = String(e);
-  return (
+  const hex = `0x${code.toString(16)}`;
+  if (
     s.includes(`Error Number: ${code}`) ||
-    s.includes(`custom program error: 0x${code.toString(16)}`) ||
+    s.includes(`custom program error: ${hex}`) ||
     s.includes(`"Custom":${code}`)
-  );
+  ) return true;
+  // Check transaction logs (SendTransactionError has .logs)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const logs = (e as any)?.logs;
+  if (Array.isArray(logs) && logs.some((l: string) => typeof l === "string" && l.includes(hex))) return true;
+  return false;
 }
 
 function hasAnchorError(e: unknown, code: number): boolean {
@@ -407,6 +413,28 @@ export function useGame() {
     }
 
     debugLog.log("TX", `autoClaimTimeouts: claimed ${claimed}/${allGames.length}`);
+
+    // All games exist but none were claimable (all terminal or all claims failed).
+    // Counter is stale. Reset it so the player can create/join new games.
+    if (claimed === 0) {
+      debugLog.log("TX", "autoClaimTimeouts: 0 claimed (all terminal or failed), resetting stale counter");
+      try {
+        const [profilePda] = getProfilePda(player);
+        const start = Date.now();
+        const sig = await program.methods
+          .resetActiveGames()
+          .accounts({
+            player,
+            playerProfile: profilePda,
+          })
+          .rpc();
+        debugLog.log("TX", `reset_active_games SUCCESS sig=${sig} latency=${Date.now() - start}ms`);
+        addTxLog(sig, "reset_active_games", Date.now() - start);
+      } catch (e) {
+        debugLog.error("reset_active_games failed (non-fatal)", e);
+      }
+    }
+
     return claimed;
   }
 
@@ -737,6 +765,38 @@ export function useGame() {
       const program = baseProgram();
       const [profilePda] = getProfilePda(publicKey!);
 
+      // Pre-emptive stale counter reset: check profile BEFORE batch to avoid TooManyGames.
+      // If active_games >= 3 and no real games exist, reset counter proactively.
+      const profileCheck = await connection.getAccountInfo(profilePda);
+      if (profileCheck) {
+        try {
+          const profileDecoded = program.coder.accounts.decode("playerProfile", profileCheck.data);
+          if (profileDecoded.activeGames >= 3) {
+            debugLog.log("ORCH", `pre-check: active_games=${profileDecoded.activeGames}, running autoClaimTimeouts`);
+            setSetupStatus("Cleaning up stale games...");
+            await autoClaimTimeouts(publicKey!);
+
+            // Wait for RPC to catch up, then re-verify
+            await sleep(2000);
+            const rechecked = await connection.getAccountInfo(profilePda);
+            if (rechecked) {
+              try {
+                const reDecoded = program.coder.accounts.decode("playerProfile", rechecked.data);
+                debugLog.log("ORCH", `pre-check: after cleanup, active_games=${reDecoded.activeGames}`);
+                if (reDecoded.activeGames >= 3) {
+                  debugLog.log("ORCH", "pre-check: still stale after cleanup, forcing second reset");
+                  const [ppda] = getProfilePda(publicKey!);
+                  await program.methods.resetActiveGames().accounts({ player: publicKey!, playerProfile: ppda }).rpc();
+                  await sleep(2000);
+                }
+              } catch { /* non-fatal */ }
+            }
+          }
+        } catch (decErr) {
+          debugLog.log("ORCH", `pre-check: profile decode failed (non-fatal): ${decErr}`);
+        }
+      }
+
       if (role === "a" && !existingAccount) {
         // Player A fresh game: batch ensureProfile + create_game + register_session_key
         debugLog.log("ORCH", "step 1: Player A BATCHED create START");
@@ -809,10 +869,13 @@ export function useGame() {
         try {
           await sendBatchedTx(instructions, 400_000, "create+session");
         } catch (e) {
+          debugLog.log("ORCH", `batch "create+session" failed: ${String(e).substring(0, 300)}`);
+          debugLog.log("ORCH", `hasErrorCode(6020)=${hasErrorCode(e, ERR_TOO_MANY_GAMES)}`);
           if (hasErrorCode(e, ERR_TOO_MANY_GAMES)) {
-            debugLog.log("ORCH", "TooManyGames in batch — running autoClaimTimeouts");
+            debugLog.log("ORCH", "TooManyGames in batch — running autoClaimTimeouts + retry");
             setSetupStatus("Cleaning up stale games...");
             await autoClaimTimeouts(publicKey!);
+            // sendBatchedTx builds a fresh TX with new blockhash internally
             await sendBatchedTx(instructions, 400_000, "create+session (retry)");
           } else {
             throw e;
@@ -930,8 +993,10 @@ export function useGame() {
           try {
             await sendBatchedTx(instructions, 500_000, "join+delegate+session");
           } catch (e) {
+            debugLog.log("ORCH", `batch "join+delegate+session" failed: ${String(e).substring(0, 300)}`);
+            debugLog.log("ORCH", `hasErrorCode(6020)=${hasErrorCode(e, ERR_TOO_MANY_GAMES)}`);
             if (hasErrorCode(e, ERR_TOO_MANY_GAMES)) {
-              debugLog.log("ORCH", "TooManyGames in batch — running autoClaimTimeouts");
+              debugLog.log("ORCH", "TooManyGames in batch — running autoClaimTimeouts + retry");
               setSetupStatus("Cleaning up stale games...");
               await autoClaimTimeouts(publicKey!);
               await sendBatchedTx(instructions, 500_000, "join+delegate+session (retry)");
@@ -1325,21 +1390,26 @@ export function useGame() {
     const pda = gamePdaRef.current;
     if (!publicKey || !pda || !gs) return;
 
-    debugLog.log("TX", "settle_game SENDING", { game: pda, program: "TEE" });
-    const program = teeProgram();
+    // Use session key for settle (TEE is gasless, session key works with 0 lamports)
+    const useSession = sessionKeypairRef.current != null;
+    const program = useSession ? sessionTeeProgram() : teeProgram();
+    const signerKey = useSession ? sessionKeypairRef.current!.publicKey : publicKey;
     const [leaderboardPda] = getLeaderboardPda();
     const [boardA] = getBoardPda(pda, gs.playerA);
     const [boardB] = getBoardPda(pda, gs.playerB);
+    const [sessionAuthorityPda] = getSessionAuthorityPda(pda, publicKey);
 
+    debugLog.log("TX", `settle_game SENDING (${useSession ? "session" : "wallet"})`, { game: pda, program: "TEE" });
     const start = Date.now();
     const sig = await program.methods
       .settleGame()
       .accounts({
-        payer: publicKey,
+        payer: signerKey,
         game: pda,
         leaderboard: leaderboardPda,
         boardA,
         boardB,
+        sessionAuthority: useSession ? sessionAuthorityPda : null,
       })
       .rpc();
     debugLog.log("TX", `settle_game SUCCESS sig=${sig} latency=${Date.now() - start}ms`);
@@ -1424,24 +1494,23 @@ export function useGame() {
     setEndGameStatus("claiming");
     debugLog.log("TX", "end-game: auto-claim starting");
 
-    const useSession = sessionKeypairRef.current != null;
-    const program = useSession ? sessionBaseProgram() : baseProgram();
-    const signerKey = useSession ? sessionKeypairRef.current!.publicKey : publicKey;
+    // Always use wallet for claim_prize (session key has 0 lamports for fees).
+    // One wallet popup at game end is acceptable.
+    const claimProgram = baseProgram();
     const [profileA] = getProfilePda(finalGs.playerA);
     const [profileB] = getProfilePda(finalGs.playerB);
-    const [sessionAuthorityPda] = getSessionAuthorityPda(pda, publicKey);
 
     try {
       const start = Date.now();
-      const sig = await program.methods
+      const sig = await claimProgram.methods
         .claimPrize()
         .accounts({
-          winner: signerKey,
+          winner: publicKey,
           winnerWallet: publicKey,
           game: pda,
           profileA,
           profileB,
-          sessionAuthority: useSession ? sessionAuthorityPda : null,
+          sessionAuthority: null,
         })
         .rpc();
 
@@ -1752,19 +1821,16 @@ export function useGame() {
       const [profileB] = getProfilePda(gs.playerB);
 
       debugLog.log("TX", "claim_prize SENDING", { winner: publicKey, game: gamePda, program: "base" });
-      const [sessionAuthorityPda] = getSessionAuthorityPda(gamePda, publicKey);
-      const useSession = sessionKeypairRef.current != null;
-      const sigProgram = useSession ? sessionBaseProgram() : program;
-      const signerKey = useSession ? sessionKeypairRef.current!.publicKey : publicKey;
-      const sig = await sigProgram.methods
+      // Always use wallet for claim_prize (session key has 0 lamports for fees)
+      const sig = await program.methods
         .claimPrize()
         .accounts({
-          winner: signerKey,
+          winner: publicKey,
           winnerWallet: publicKey,
           game: gamePda,
           profileA,
           profileB,
-          sessionAuthority: useSession ? sessionAuthorityPda : null,
+          sessionAuthority: null,
         })
         .rpc();
 

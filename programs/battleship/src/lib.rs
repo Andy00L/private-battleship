@@ -1051,7 +1051,14 @@ pub mod battleship {
     #[allow(deprecated)]
     pub fn settle_game(ctx: Context<SettleGame>) -> Result<()> {
         let game = &ctx.accounts.game;
-        let caller = ctx.accounts.payer.key();
+        let signer_key = ctx.accounts.payer.key();
+
+        // Resolve actual player from signer or session key
+        let caller = resolve_player(
+            signer_key,
+            &ctx.accounts.session_authority,
+            game.key(),
+        )?;
 
         // Access control: only players can settle
         require!(
@@ -1621,6 +1628,8 @@ pub struct SettleGame<'info> {
     /// CHECK: Board B account (delegated to TEE)
     #[account(mut)]
     pub board_b: AccountInfo<'info>,
+    /// Optional session authority for session key signing
+    pub session_authority: Option<Account<'info, SessionAuthority>>,
 }
 
 #[derive(Accounts)]
