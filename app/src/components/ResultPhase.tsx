@@ -19,12 +19,14 @@ interface ResultPhaseProps {
   isWinner: boolean;
   winnerLabel: string;
   potLamports: number;
+  buyInLamports: number;
   solPriceUsd: number;
   onClaimPrize: () => void;
   onVerifyBoard: () => void;
   onNewGame: () => void;
   prizeClaimed: boolean;
   myShipPlacements?: ShipPlacement[] | null;
+  opponentShipPlacements?: ShipPlacement[] | null;
   endGameStatus: EndGameStatus;
 }
 
@@ -34,12 +36,14 @@ export function ResultPhase({
   isWinner,
   winnerLabel,
   potLamports,
+  buyInLamports,
   solPriceUsd,
   onClaimPrize,
   onVerifyBoard,
   onNewGame,
   prizeClaimed,
   myShipPlacements,
+  opponentShipPlacements,
   endGameStatus,
 }: ResultPhaseProps) {
   const isSettling = endGameStatus === "settling" || endGameStatus === "none";
@@ -90,8 +94,10 @@ export function ResultPhase({
             <p className="text-slate-500 mt-2 font-mono text-xs tracking-wider">
               Winner: {winnerLabel}
             </p>
-            <p className="text-2xl font-mono text-slate-200 mt-1">
-              {formatBuyInDisplay(potLamports, solPriceUsd)}
+            <p className={`text-2xl font-mono mt-1 ${isWinner ? "text-emerald-400" : "text-red-400"}`}>
+              {isWinner
+                ? `You won ${formatBuyInDisplay(potLamports > 0 ? potLamports : buyInLamports * 2, solPriceUsd)}`
+                : `You lost ${formatBuyInDisplay(buyInLamports, solPriceUsd)}`}
             </p>
           </motion.div>
 
@@ -110,7 +116,7 @@ export function ResultPhase({
                 Opponent Board
               </h3>
               <div className="glass-panel p-5">
-                <BattleGrid grid={opponentGrid} isOpponent={false} disabled />
+                <BattleGrid grid={opponentGrid} isOpponent={false} disabled shipPlacements={opponentShipPlacements} />
               </div>
             </div>
           </div>

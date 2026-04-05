@@ -117,7 +117,7 @@ export default function Home() {
         {game.phase === "finished" && (
           <ResultPhase
             myGrid={game.myGrid}
-            opponentGrid={game.opponentHits}
+            opponentGrid={game.opponentRevealedGrid ?? game.opponentHits}
             isWinner={game.isWinner}
             winnerLabel={
               game.gameState?.hasWinner
@@ -125,12 +125,14 @@ export default function Home() {
                 : "None"
             }
             potLamports={game.gameState?.potLamports ?? 0}
+            buyInLamports={game.gameState?.buyInLamports ?? 0}
             solPriceUsd={solPriceUsd}
             onClaimPrize={game.claimPrize}
             onVerifyBoard={game.verifyBoard}
             onNewGame={game.newGame}
             prizeClaimed={game.prizeClaimed}
             myShipPlacements={game.myShipPlacements}
+            opponentShipPlacements={game.opponentShipPlacements}
             endGameStatus={game.endGameStatus}
           />
         )}

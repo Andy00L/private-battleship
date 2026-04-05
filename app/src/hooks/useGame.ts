@@ -178,6 +178,8 @@ export function useGame() {
   const [setupStatus, setSetupStatus] = useState("");
   const [setupError, setSetupError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [opponentRevealedGrid, setOpponentRevealedGrid] = useState<number[] | null>(null);
+  const [opponentShipPlacements, setOpponentShipPlacements] = useState<ShipPlacementInput[] | null>(null);
   const [endGameStatus, setEndGameStatus] = useState<
     "none" | "settling" | "settled" | "claiming" | "claimed" | "error"
   >("none");
@@ -426,14 +428,10 @@ export function useGame() {
     return claimed;
   }
 
-  /** Reset all internal state for a fresh game. */
-  function resetForNewGame(): void {
-    debugLog.log("STATE", "resetForNewGame");
-    if (baseSubRef.current !== null) {
-      connection.removeAccountChangeListener(baseSubRef.current);
-      baseSubRef.current = null;
-    }
-    if (teeRef.current) {
+  /** Clean up TEE subscriptions and destroy the connection manager (stops refresh timer). */
+  function destroyTeeConnection(): void {
+    if (!teeRef.current) return;
+    try {
       const teeConn = teeRef.current.getConnection();
       if (teeSubRef.current !== null) {
         teeConn.removeAccountChangeListener(teeSubRef.current);
@@ -443,7 +441,20 @@ export function useGame() {
         teeConn.removeAccountChangeListener(teeBoardSubRef.current);
         teeBoardSubRef.current = null;
       }
+    } catch { /* connection may already be destroyed */ }
+    teeRef.current.destroy();
+    teeRef.current = null;
+    debugLog.log("TEE", "connection destroyed");
+  }
+
+  /** Reset all internal state for a fresh game. */
+  function resetForNewGame(): void {
+    debugLog.log("STATE", "resetForNewGame");
+    if (baseSubRef.current !== null) {
+      connection.removeAccountChangeListener(baseSubRef.current);
+      baseSubRef.current = null;
     }
+    destroyTeeConnection();
 
     settledRef.current = false;
     firingRef.current = false;
@@ -571,18 +582,7 @@ export function useGame() {
         connection.removeAccountChangeListener(baseSubRef.current);
         baseSubRef.current = null;
       }
-      if (teeRef.current) {
-        const teeConn = teeRef.current.getConnection();
-        if (teeSubRef.current !== null) {
-          teeConn.removeAccountChangeListener(teeSubRef.current);
-          teeSubRef.current = null;
-        }
-        if (teeBoardSubRef.current !== null) {
-          teeConn.removeAccountChangeListener(teeBoardSubRef.current);
-          teeBoardSubRef.current = null;
-        }
-        teeRef.current.destroy();
-      }
+      destroyTeeConnection();
       if (sessionKeypairRef.current) {
         debugLog.log("SESSION", "Session key cleared", { reason: "unmount" });
         sessionKeypairRef.current = null;
@@ -1485,6 +1485,29 @@ export function useGame() {
       finalGs = parseGameState(decoded);
       setGameState(finalGs);
       debugLog.log("ORCH", `end-game: final state fetched, winner=${pk(finalGs.winner)}`);
+
+      // Fetch opponent's revealed board from L1
+      try {
+        const opponentKey = finalGs.playerA.equals(publicKey!)
+          ? finalGs.playerB
+          : finalGs.playerA;
+        const [oppBoardPda] = getBoardPda(pda, opponentKey);
+        const oppBoard = await baseP.account.playerBoard.fetch(oppBoardPda);
+        setOpponentRevealedGrid(Array.from(oppBoard.grid as number[]));
+        setOpponentShipPlacements(
+          (oppBoard.ships as any[])
+            .filter((s: any) => s.size > 0)
+            .map((s: any) => ({
+              startRow: s.startRow,
+              startCol: s.startCol,
+              size: s.size,
+              horizontal: s.horizontal !== 0,
+            })),
+        );
+        debugLog.log("ORCH", "end-game: opponent board fetched");
+      } catch (e) {
+        debugLog.error("end-game: failed to fetch opponent board", e);
+      }
     } catch (e) {
       debugLog.error("end-game: failed to fetch final state", e);
       setEndGameStatus("error");
@@ -1495,6 +1518,7 @@ export function useGame() {
     if (!finalGs.hasWinner || !finalGs.winner.equals(publicKey)) {
       debugLog.log("ORCH", "end-game: not the winner, skipping claim");
       setEndGameStatus("claimed");
+      destroyTeeConnection();
       return;
     }
 
@@ -1529,6 +1553,7 @@ export function useGame() {
       debugLog.error("auto-claim failed, manual fallback available", e);
       setEndGameStatus("settled");
     }
+    destroyTeeConnection();
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -1979,6 +2004,8 @@ export function useGame() {
     gamePda,
     myGrid,
     opponentHits,
+    opponentRevealedGrid,
+    opponentShipPlacements,
     isMyTurn,
     shipsRemainingMe,
     shipsRemainingOpponent,

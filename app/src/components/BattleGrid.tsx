@@ -235,7 +235,7 @@ export function BattleGrid({
                     src="/assets/ship-1.svg"
                     alt=""
                     aria-hidden="true"
-                    className="w-9 h-9 object-contain opacity-70"
+                    className="absolute inset-0 m-auto w-9 h-9 object-contain opacity-70"
                     style={{ zIndex: 10 }}
                   />
                 )}
@@ -246,7 +246,7 @@ export function BattleGrid({
                     src="/assets/ship-1.svg"
                     alt=""
                     aria-hidden="true"
-                    className="w-9 h-9 object-contain opacity-70"
+                    className="absolute inset-0 m-auto w-9 h-9 object-contain opacity-70"
                     style={{ zIndex: 10 }}
                   />
                 )}
@@ -258,7 +258,7 @@ export function BattleGrid({
                     src="/assets/hit.svg"
                     alt=""
                     aria-hidden="true"
-                    className="relative w-10 h-10 object-contain"
+                    className="absolute inset-0 m-auto w-10 h-10 object-contain"
                     style={{ zIndex: 20 }}
                   />
                 )}
@@ -268,7 +268,7 @@ export function BattleGrid({
                     src="/assets/miss.svg"
                     alt=""
                     aria-hidden="true"
-                    className="relative w-8 h-8 object-contain opacity-70"
+                    className="absolute inset-0 m-auto w-8 h-8 object-contain opacity-70"
                     style={{ zIndex: 20 }}
                   />
                 )}
