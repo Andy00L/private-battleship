@@ -12,7 +12,7 @@ The program runs across two execution contexts: Solana L1 (base layer) and Magic
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                           FRONTEND (Next.js 16.2.2)                          │
 │                                                                              │
-│  useGame.ts (1945 lines)                                                     │
+│  useGame.ts (2032 lines)                                                     │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │  GameLobby   │  │  Placement   │  │   Battle     │  │   Result     │     │
 │  │  create/join │  │  place_ships │  │   fire       │  │  settle/claim│     │
@@ -48,30 +48,31 @@ The program runs across two execution contexts: Solana L1 (base layer) and Magic
 ```
 solana-blitz-v3/
 ├── programs/battleship/src/
-│   └── lib.rs                       # 1783 lines - Solana program (19 instructions, 36 errors)
+│   └── lib.rs                       # 1796 lines - Solana program (19 instructions, 36 errors)
 ├── app/                             # Frontend application
 │   └── src/
 │       ├── app/
 │       │   ├── layout.tsx           # Root layout + wallet provider
 │       │   └── page.tsx             # Phase router
 │       ├── components/              # 10 components
-│       │   ├── BattleGrid.tsx       # 342 lines
+│       │   ├── BattleGrid.tsx       # 330 lines
 │       │   ├── BattlePhase.tsx      # 159 lines
 │       │   ├── DebugLogButton.tsx   #  23 lines
-│       │   ├── GameBackground.tsx   # 115 lines
-│       │   ├── GameLobby.tsx        # 139 lines
+│       │   ├── GameBackground.tsx   # 148 lines
+│       │   ├── GameLobby.tsx        # 184 lines
 │       │   ├── HeroVideo.tsx        #  27 lines
-│       │   ├── PlacementPhase.tsx   # 307 lines
-│       │   ├── ResultPhase.tsx      # 164 lines
+│       │   ├── PlacementPhase.tsx   # 356 lines
+│       │   ├── ResultPhase.tsx      # 157 lines
 │       │   ├── TransactionLog.tsx   #  69 lines
 │       │   └── wallet-provider.tsx  #  36 lines
 │       ├── hooks/
-│       │   └── useGame.ts           # 1945 lines
-│       └── lib/                     # 5 utility modules
+│       │   └── useGame.ts           # 2032 lines
+│       └── lib/                     # 6 utility modules
 │           ├── program.ts           # 126 lines
 │           ├── tee-connection.ts    # 105 lines
 │           ├── debug-logger.ts      #  90 lines
 │           ├── board-hash.ts        #  36 lines
+│           ├── sfx.ts               #  69 lines
 │           ├── oracle.ts            #  25 lines
 │           └── idl.json             # Anchor IDL (auto-generated)
 ├── Anchor.toml
@@ -79,7 +80,7 @@ solana-blitz-v3/
 └── rust-toolchain.toml              # Rust 1.89.0
 ```
 
-Total frontend: 3941 lines across all files.
+Total frontend: 4325 lines across all files.
 
 ## Game Lifecycle Sequence Diagram
 
@@ -690,7 +691,7 @@ The Pricing Oracle displays SOL/USD equivalent in the game lobby. The contract d
 
 ### Single hook architecture
 
-All game state, subscriptions, and transaction logic lives in `useGame.ts` (1945 lines). Components are pure rendering. This keeps data flow unidirectional and makes it straightforward to reason about state transitions.
+All game state, subscriptions, and transaction logic lives in `useGame.ts` (2032 lines). Components are pure rendering. This keeps data flow unidirectional and makes it straightforward to reason about state transitions.
 
 ### TX batching for minimal popups
 

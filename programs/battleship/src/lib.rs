@@ -1204,7 +1204,11 @@ pub mod battleship {
 
         match game.status {
             s if s == GameStatus::WaitingForPlayer as u8 => {
-                // No opponent joined. Refund Player A.
+                // No opponent joined. Only player_a can claim.
+                // Defense-in-depth: Signer constraint already prevents non-player_a
+                // (player_b is Pubkey::default, nobody can sign for it), but explicit
+                // check ensures refund always goes to game creator.
+                require!(claimer == game.player_a, BattleshipError::NotPlayerA);
                 game.status = GameStatus::Cancelled as u8;
                 let refund = game.buy_in_lamports;
                 **game.to_account_info().try_borrow_mut_lamports()? -= refund;

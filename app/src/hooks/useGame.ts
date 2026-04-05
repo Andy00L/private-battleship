@@ -257,19 +257,6 @@ export function useGame() {
     return getProgram(conn, wallet);
   }
 
-  /** Anchor program using session keypair on base layer (no wallet popups for claim). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function sessionBaseProgram(): any {
-    if (!sessionKeypairRef.current) throw new Error("No session key");
-    const kp = sessionKeypairRef.current;
-    const wallet: AnchorWallet = {
-      publicKey: kp.publicKey,
-      signTransaction: async (tx) => { tx.partialSign(kp); return tx; },
-      signAllTransactions: async (txs) => { txs.forEach((tx) => tx.partialSign(kp)); return txs; },
-    };
-    return getProgram(connection, wallet);
-  }
-
   function sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
   }
@@ -1772,10 +1759,15 @@ export function useGame() {
         ) {
           debugLog.log("SESSION", "Session key error in fire, switching to wallet signing");
           sessionKeypairRef.current = null;
+          // Release the guard so the recursive retry can acquire it
           firingRef.current = false;
-          // Retry immediately with wallet
-          await fire(row, col);
-          return;
+          try {
+            await fire(row, col);
+          } finally {
+            // Prevent the outer finally from redundantly toggling firingRef
+            // (the recursive call's own finally already handled it)
+            return;
+          }
         }
         console.error("fire failed:", e);
         debugLog.error(`fire(${row},${col}) FAILED`, e);

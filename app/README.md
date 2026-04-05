@@ -2,7 +2,7 @@
 
 [Back to main README](../README.md)
 
-Next.js 16.2.2 frontend for the Private Battleship on-chain game. 10 components, 1 hook, 5 utility modules. 3941 lines of TypeScript/React total.
+Next.js 16.2.2 frontend for the Private Battleship on-chain game. 10 components, 1 hook, 6 utility modules. 4325 lines of TypeScript/React total.
 
 ## Setup
 
@@ -127,7 +127,7 @@ Recent shot highlighting (3 most recent shots):
 
 ## useGame Hook
 
-1945 lines. The entire game lifecycle: state management, TEE connection, transaction building, account subscriptions, orchestration, and auto-settlement.
+2032 lines. The entire game lifecycle: state management, TEE connection, transaction building, account subscriptions, orchestration, and auto-settlement.
 
 ### State
 

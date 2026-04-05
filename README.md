@@ -4,8 +4,8 @@ Fully on-chain Battleship on Solana where your opponent cannot see your ships. S
 
 Built with five MagicBlock products: Private Ephemeral Rollups, Ephemeral Rollups, VRF, Magic Actions, and Pricing Oracle.
 
-- Solana program: 1783 lines of Rust, 19 instructions, 36 error codes
-- Frontend: 3941 lines of TypeScript/React across 10 components, 1 hook, 5 utilities
+- Solana program: 1796 lines of Rust, 19 instructions, 36 error codes
+- Frontend: 4325 lines of TypeScript/React across 10 components, 1 hook, 6 utilities
 - Program ID: `9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR`
 
 ## Quick Start
@@ -69,7 +69,7 @@ WaitingForPlayer ──[join_game]──> Placing ──[both place_ships]──
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └───────┬──────────┘   │
 │       └──────────────┴──────────────┴───────────────┘              │
 │                              │                                      │
-│                       useGame.ts (1945 lines)                       │
+│                       useGame.ts (2032 lines)                       │
 │                              │                                      │
 ├──────────────────────────────┼──────────────────────────────────────┤
 │              Solana Devnet   │         TEE (Intel TDX)              │
@@ -96,30 +96,31 @@ WaitingForPlayer ──[join_game]──> Placing ──[both place_ships]──
 ```
 solana-blitz-v3/
 ├── programs/battleship/src/
-│   └── lib.rs                    # 1783 lines, entire Solana program
+│   └── lib.rs                    # 1796 lines, entire Solana program
 ├── app/
 │   └── src/
 │       ├── app/
 │       │   ├── layout.tsx        # Root layout with wallet provider
 │       │   └── page.tsx          # Phase router (lobby/placement/battle/result)
 │       ├── components/
-│       │   ├── BattleGrid.tsx    # 342 lines - 6x6 grid with multi-cell ship SVGs
+│       │   ├── BattleGrid.tsx    # 330 lines - 6x6 grid with multi-cell ship SVGs
 │       │   ├── BattlePhase.tsx   # 159 lines - two grids + turn indicator
 │       │   ├── DebugLogButton.tsx # 23 lines - floating debug download
-│       │   ├── GameBackground.tsx # 115 lines - fullscreen video + audio toggle
-│       │   ├── GameLobby.tsx     # 139 lines - create/join game forms
+│       │   ├── GameBackground.tsx # 148 lines - fullscreen video + audio toggle
+│       │   ├── GameLobby.tsx     # 184 lines - create/join game forms
 │       │   ├── HeroVideo.tsx     # 27 lines - lobby video background
-│       │   ├── PlacementPhase.tsx # 307 lines - ship placement with SVG preview
-│       │   ├── ResultPhase.tsx   # 164 lines - auto-settle/claim progress
+│       │   ├── PlacementPhase.tsx # 356 lines - ship placement with SVG preview
+│       │   ├── ResultPhase.tsx   # 157 lines - auto-settle/claim progress
 │       │   ├── TransactionLog.tsx # 69 lines - color-coded TX entries
 │       │   └── wallet-provider.tsx # 36 lines - Phantom on configurable RPC
 │       ├── hooks/
-│       │   └── useGame.ts        # 1945 lines - entire game lifecycle
+│       │   └── useGame.ts        # 2032 lines - entire game lifecycle
 │       └── lib/
 │           ├── program.ts        # 126 lines - PDA derivation, Anchor factory
 │           ├── tee-connection.ts # 105 lines - TEE auth with retry + fallback
 │           ├── board-hash.ts     # 36 lines - SHA-256 commit-reveal
 │           ├── debug-logger.ts   # 90 lines - categorized logging
+│           ├── sfx.ts            # 69 lines - sound effects manager
 │           ├── oracle.ts         # 25 lines - SOL/USD price stub
 │           └── idl.json          # Anchor IDL (auto-generated)
 ├── Anchor.toml
@@ -131,7 +132,7 @@ solana-blitz-v3/
 
 Program ID: `9DiCaM3ugtjo1f3xoCpG7Nxij112Qc9znVfjQvT6KHRR`
 
-1783 lines of Rust. 19 `pub fn` instructions defined in source code. The `#[ephemeral]` macro on the program module generates a 20th instruction (`process_undelegation`) that appears in the IDL but is not explicitly written.
+1796 lines of Rust. 19 `pub fn` instructions defined in source code. The `#[ephemeral]` macro on the program module generates a 20th instruction (`process_undelegation`) that appears in the IDL but is not explicitly written.
 
 ### Instructions (19 + 1 auto-generated)
 
@@ -254,24 +255,24 @@ Three layers of privacy protection:
 
 ## Frontend
 
-10 components, 1 hook, 5 utility modules. 3941 lines total across all frontend files.
+10 components, 1 hook, 6 utility modules. 4325 lines total across all frontend files.
 
 ### Components
 
 | Component | Lines | Description |
 |---|---|---|
-| `BattleGrid.tsx` | 342 | 6x6 grid with multi-cell ship SVGs (ship-2.svg, ship-3.svg). Horizontal uses object-cover, vertical uses rotate(90deg) + translateX correction + GPU compositing. 3 most recent shots highlighted with CSS-animated borders (orange=hit, cyan=miss, red=sunk), 5s fade. Hit/miss/crosshair icon overlays. |
-| `PlacementPhase.tsx` | 307 | Ship placement interface with multi-cell SVG preview. Drag ships onto grid, rotate with click. |
-| `ResultPhase.tsx` | 164 | Status-based result screen. Auto-settle on TEE, polls L1 confirmation (up to 90s), auto-claim with session key (zero popups for winner). Tracks endGameStatus: none/settling/settled/claiming/claimed/error. |
+| `BattleGrid.tsx` | 330 | 6x6 grid with multi-cell ship SVGs (ship-2.svg, ship-3.svg). Horizontal uses object-cover, vertical uses rotate(90deg) + translateX correction + GPU compositing. 3 most recent shots highlighted with CSS-animated borders (orange=hit, cyan=miss, red=sunk), 5s fade. Hit/miss/crosshair icon overlays. |
+| `PlacementPhase.tsx` | 356 | Ship placement interface with multi-cell SVG preview. Drag ships onto grid, rotate with click. |
+| `ResultPhase.tsx` | 157 | Status-based result screen. Auto-settle on TEE, polls L1 confirmation (up to 90s), auto-claim with session key (zero popups for winner). Tracks endGameStatus: none/settling/settled/claiming/claimed/error. |
 | `BattlePhase.tsx` | 159 | Two grids (yours + opponent's) with turn indicator and transaction log sidebar. |
-| `GameLobby.tsx` | 139 | Create game (set buy-in, optional invite) and join game forms. Shows SOL/USD price via Oracle stub. |
-| `GameBackground.tsx` | 115 | Fullscreen video background (/assets/game-bg.mp4, 31MB) on placement/battle/result phases. Audio toggle with localStorage persistence. Gradient fallback. Respects prefers-reduced-motion. |
+| `GameLobby.tsx` | 184 | Create game (set buy-in, optional invite) and join game forms. Shows SOL/USD price via Oracle stub. |
+| `GameBackground.tsx` | 148 | Fullscreen video background (/assets/game-bg.mp4, 31MB) on placement/battle/result phases. Audio toggle with localStorage persistence. Gradient fallback. Respects prefers-reduced-motion. |
 | `TransactionLog.tsx` | 69 | Color-coded transaction entries showing action, latency, and hit/miss/sunk result. |
 | `wallet-provider.tsx` | 36 | Phantom wallet adapter on configurable RPC (NEXT_PUBLIC_RPC_URL). |
 | `HeroVideo.tsx` | 27 | Lobby phase video background. |
 | `DebugLogButton.tsx` | 23 | Floating button to download debug logs. Only visible when NEXT_PUBLIC_DEBUG_LOG is set. |
 
-### useGame Hook (1945 lines)
+### useGame Hook (2032 lines)
 
 The entire game lifecycle lives in a single hook. It manages state, subscriptions, transaction building, orchestration, and auto-settlement.
 
@@ -290,6 +291,7 @@ Key features:
 | `tee-connection.ts` | 105 | TEE auth token management with 3 retry attempts + exponential backoff. Devnet: falls back to proceed without attestation. Mainnet: strict (throws). |
 | `debug-logger.ts` | 90 | Categorized logging (game, tee, tx, orchestration) with JSON download |
 | `board-hash.ts` | 36 | SHA-256 board hash generation for commit-reveal. Generates random 32-byte salt. |
+| `sfx.ts` | 69 | Sound effects manager. 6 naval sounds (hit, miss, sunk for both players). Singleton with preload, clone-on-play, localStorage toggle. |
 | `oracle.ts` | 25 | SOL/USD price stub for display. Contract only deals in lamports. |
 
 ## Dependencies
